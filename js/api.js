@@ -34,6 +34,8 @@ WC.api = (function () {
     }
     if (!body.ok) {
       const err = makeError(body.error && body.error.code, body.error && body.error.message);
+      if (body.error && body.error.warnings) err.warnings = body.error.warnings; // NEED_CONFIRM 的提醒清單
+      if (body.error && body.error.candidates) err.candidates = body.error.candidates; // 稱呼對到多位學生時的候選姓名（只含相符者）
       if (err.code === 'BAD_TOKEN' || err.code === 'NO_TOKEN') WC.auth.onTokenInvalid();
       throw err;
     }
@@ -59,6 +61,8 @@ WC.api = (function () {
     uploadPhoto: function (month, full, thumb, w, h) {
       return call('uploadPhoto', { month: month, full: full, thumb: thumb, w: w, h: h });
     },
-    getPhotos: function (ids) { return call('getPhotos', { ids: ids }); }
+    getPhotos: function (ids) { return call('getPhotos', { ids: ids }); },
+    /** 第 2 階段：AI 整理。record 只含 title、date、unit、layout、rawText、photoCount、photoNotes（不含照片本身） */
+    aiDraft: function (record, confirm) { return call('aiDraft', { record: record, confirm: !!confirm }); }
   };
 })();

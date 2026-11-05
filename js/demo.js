@@ -21,6 +21,14 @@ WC.demo = (function () {
     maxPhotos: 20
   };
   const TEACHER_STATUSES = ['草稿', '已確認'];
+  // 示範用學生名單：模擬「只在伺服器端」的資料，不經 bootstrap 回傳；示範 AI（demo-ai）在這個閉包內使用
+  const DEMO_ROSTER = [
+    { code: 'S1', name: '王小明', nicknames: ['阿明'], disabledAuto: [], active: true },
+    { code: 'S2', name: '陳安', nicknames: ['安安'], disabledAuto: [], active: true },
+    { code: 'S3', name: '林心如', nicknames: [], disabledAuto: [], active: true },
+    { code: 'S4', name: '李安安', nicknames: ['安安'], disabledAuto: [], active: true }
+  ];
+  let demoResponseLimit = 6 * 1024 * 1024; // 模擬 getPhotos 回應上限；回測可用 WC.demo.setResponseLimit() 調小
   const STATUSES = ['草稿', '已確認', '已採用', '不採用'];
 
   let currentUser = USERS.editor;
@@ -162,21 +170,40 @@ WC.demo = (function () {
       if (seen[p.id] || seen[p.thumbId]) return false;
       seen[p.id] = true; seen[p.thumbId] = true;
       return true;
-    }).map(function (p) { return { id: p.id, thumbId: p.thumbId, w: p.w, h: p.h }; });
+    }).map(function (p, i) { return photoExtras(p, { id: p.id, thumbId: p.thumbId, w: p.w, h: p.h }, i + 1); });
+  }
+
+  /** 與 GAS sanitizePhotoExtras_ 相同：caption ≤40、note ≤100（超過回 BAD_REQUEST）、fx／fy 0–1 */
+  function photoExtras(ph, out, no) {
+    const text = function (v, max, label) {
+      const s = String(v == null ? '' : v).replace(/[\r\n]+/g, ' ').trim();
+      if (Array.from(s).length > max) fail('BAD_REQUEST', (no ? '第 ' + no + ' 張' : '') + label + '最多 ' + max + ' 字');
+      return s;
+    };
+    const cap = text(ph.caption, 40, '照片圖說'), note = text(ph.note, 100, '照片備註');
+    if (cap) out.caption = cap;
+    if (note) out.note = note;
+    ['fx', 'fy'].forEach(function (k) {
+      const v = ph[k];
+      if (v == null || v === '') return;
+      const n = Number(v);
+      if (isFinite(n) && n >= 0 && n <= 1) out[k] = Math.round(n * 1000) / 1000;
+    });
+    return out;
   }
 
   function validate(r) {
     const title = String(r.title || '').trim();
     if (!title) fail('BAD_REQUEST', '請填寫標題');
-    if (title.length > 60) fail('BAD_REQUEST', '標題最多 60 字');
+    if (Array.from(title).length > 60) fail('BAD_REQUEST', '標題最多 60 字');
     if (!isRealDate(r.date)) fail('BAD_REQUEST', '活動日期不正確（格式應為 YYYY-MM-DD，且必須是存在的日期）');
     const old = r.id ? records.find(function (x) { return x.id === r.id; }) : null;
     if (CONFIG.units.indexOf(r.unit) < 0 && !(old && old.unit === r.unit)) fail('BAD_REQUEST', '家訊單元不在設定表的單元清單內');
     if (r.layout && CONFIG.layouts.indexOf(r.layout) < 0 && !(old && old.layout === r.layout)) fail('BAD_REQUEST', '偏好版型不在設定表的版型清單內');
     if (STATUSES.indexOf(r.status) < 0) fail('BAD_REQUEST', '處理狀態不正確');
-    if (String(r.rawText || '').length > 5000) fail('BAD_REQUEST', '原始紀錄最多 5000 字');
-    if (String(r.summary || '').length > 500) fail('BAD_REQUEST', '活動摘要最多 500 字');
-    if (String(r.newsletter || '').length > 2000) fail('BAD_REQUEST', '家訊文案最多 2000 字');
+    if (Array.from(String(r.rawText || '')).length > 5000) fail('BAD_REQUEST', '原始紀錄最多 5000 字');
+    if (Array.from(String(r.summary || '')).length > 500) fail('BAD_REQUEST', '活動摘要最多 500 字');
+    if (Array.from(String(r.newsletter || '')).length > 2000) fail('BAD_REQUEST', '家訊文案最多 2000 字');
     if ((r.photos || []).length > CONFIG.maxPhotos) fail('BAD_REQUEST', '每筆紀錄最多 ' + CONFIG.maxPhotos + ' 張照片');
     if (currentUser.role !== '主編' && TEACHER_STATUSES.indexOf(r.status) < 0) {
       fail('FORBIDDEN', '「' + r.status + '」狀態只有主編可以設定。');
@@ -185,7 +212,8 @@ WC.demo = (function () {
       id: r.id || '', month: r.date.slice(0, 7), date: r.date, unit: r.unit, title: title,
       rawText: String(r.rawText || '').trim(), summary: String(r.summary || '').trim(),
       newsletter: String(r.newsletter || '').trim(), layout: r.layout || '', status: r.status,
-      photos: dedupePhotos(r.photos || [])
+      photos: dedupePhotos(r.photos || []),
+      unitConfirmed: r.status === '草稿' ? r.unitConfirmed !== false : true   // 與 GAS 相同（v2.1）
     };
   }
 
@@ -213,7 +241,80 @@ WC.demo = (function () {
     });
   }
 
+  // ---------- 示範 AI（第 2 階段）：模擬 GAS 去名化 → AI → 還原，不連網 ----------
+  // 真正的去名化演算法在 gas/Deidentify.gs（node 測試涵蓋 24 個案例）；這裡只做示範用的簡化版。
+  let demoAiCalls = 0;
+  let demoRosterOff = false;   // 回測用：模擬名單空白
+  function demoRosterActive() { return !demoRosterOff && DEMO_ROSTER.some(function (r) { return r.active; }); }
+  let demoAiNext = null; // 回測用：指定下一次的假回應（例如 { error: 'AI_BUSY' }）
+  const DEMO_LAYOUT_BY_UNIT = { '體能活動': '相簿版', '白雲大小事': '相簿版', '學習區 A': '探索版', '學習區 B': '探索版', '生活與探索': '探索版', '主題課程': '故事版' };
+
+  function demoDeid(text) {
+    let s = String(text || '');
+    const warnings = [], candidates = [];
+    // 與 GAS 相同（v2.1 M3）：老師手打的代號不被信任，一律換成 [S?]
+    s = s.replace(/\[\[\s*S\d+\s*\]\]|\[S\d+\]/g, function () { warnings.push('原始紀錄中手打的代號不會被當成特定學生（已換成 [S?]）；要指定是誰，請寫 [[姓名]]'); return '[S?]'; });
+    s = s.replace(/\[\[([^\]]+)\]\]/g, function (m, n) {
+      const hit = DEMO_ROSTER.filter(function (r) { return r.name === n || r.name.slice(1) === n; });
+      return hit.length === 1 ? '[' + hit[0].code + ']' : '[S?]';
+    });
+    const vars = [];
+    DEMO_ROSTER.forEach(function (r) {
+      vars.push({ v: r.name, codes: [r.code] });
+      if (r.name.length >= 3) vars.push({ v: r.name.slice(1), codes: [r.code] });
+      r.nicknames.forEach(function (n) { vars.push({ v: n, codes: [r.code] }); });
+    });
+    const merged = {};
+    vars.forEach(function (x) { (merged[x.v] = merged[x.v] || []); x.codes.forEach(function (c) { if (merged[x.v].indexOf(c) < 0) merged[x.v].push(c); }); });
+    Object.keys(merged).sort(function (a, b) { return b.length - a.length; }).forEach(function (v) {
+      if (s.indexOf(v) < 0) return;
+      const cs = merged[v];
+      if (cs.length > 1) {
+        warnings.push('「' + v + '」對到不只一位學生，已換成 [S?]；請點選是哪一位');
+        candidates.push({ text: v, names: cs.map(function (c) { return DEMO_ROSTER.find(function (r) { return r.code === c; }).name; }) });
+      }
+      s = s.split(v).join(cs.length > 1 ? '[S?]' : '[' + cs[0] + ']');
+    });
+    return { text: s, warnings: warnings, candidates: candidates };
+  }
+
+  function demoRestore(s) {
+    return String(s).replace(/\[(S\d+)\]/g, function (m, c) {
+      const r = DEMO_ROSTER.find(function (x) { return x.code === c; });
+      return r ? (r.name.length >= 3 ? r.name.slice(1) : r.name) : m;
+    });
+  }
+
+  function demoAiDraft(p) {
+    if (!demoRosterActive()) fail('ROSTER_EMPTY', '請先在試算表的「學生名單」分頁填寫學生名單，才能使用 AI 整理（保護孩子的名字）。');
+    const rec = p.record || {};
+    const raw = String(rec.rawText || '');
+    if (!raw.trim()) fail('BAD_REQUEST', '請先在「說一說」寫下或口述原始紀錄。');
+    const d = demoDeid(raw);
+    if (d.text.replace(/\[S(\d+|\?)\]/g, '').replace(/\s/g, '').length < 4) fail('TOO_SHORT', '原始紀錄太短，AI 沒有東西可以整理；請多寫幾句再試。');
+    if (d.warnings.length && !p.confirm) { const e = new Error('送出前請確認以下幾點：'); e.code = 'NEED_CONFIRM'; e.warnings = d.warnings; e.candidates = d.candidates; throw e; }
+    if (demoAiNext && demoAiNext.error) { const code = demoAiNext.error; demoAiNext = null; fail(code, code === 'AI_LIMIT' ? '今天的 AI 整理次數已用完' : 'AI 服務忙碌中，請稍後再試。'); }
+    demoAiCalls += 1;
+    const n = Math.max(0, Math.min(20, Number(rec.photoCount) || 0));
+    let layout = ['故事版', '相簿版', '探索版'].indexOf(rec.layout) >= 0 ? rec.layout : (DEMO_LAYOUT_BY_UNIT[rec.unit] || '故事版');
+    if (layout === '相簿版' && !n) layout = '故事版';
+    const first = d.text.split(/[。！？\n]/).filter(Boolean)[0] || d.text;
+    // 假的 AI 回應（代號版）：只重組原始紀錄的句子，不新增事實
+    let newsletter = '（示範 AI）' + d.text.slice(0, 120);
+    if (layout === '探索版') newsletter = '嘗試：' + first + '。\n發現：【待老師補充：孩子注意到什麼】\n調整：【待老師補充：孩子後來怎麼改】';
+    const out = { summary: '（示範 AI）' + first + '。', newsletter: newsletter };
+    const warnings = d.text.indexOf('[S?]') >= 0 ? ['文案中的 [S?] 是無法確定是哪位孩子的地方，請自行填上名字或刪掉'] : [];
+    if (layout === '相簿版') {
+      out.captions = [];
+      for (let i = 0; i < n; i++) out.captions.push('第 ' + (i + 1) + ' 張：' + (((rec.photoNotes || [])[i]) ? demoDeid(rec.photoNotes[i]).text : first).slice(0, 20));
+    }
+    const data = { summary: demoRestore(out.summary), newsletter: demoRestore(out.newsletter), layoutUsed: layout, warnings: warnings };
+    if (out.captions) data.captions = out.captions.map(demoRestore);
+    return data;
+  }
+
   const handlers = {
+    aiDraft: function (p) { return demoAiDraft(p); },
     bootstrap: function () {
       // 與 GAS 相同：只有主編會收到照片資料損壞的列
       const brokenRows = currentUser.role === '主編'
@@ -221,7 +322,10 @@ WC.demo = (function () {
           .filter(function (x) { return x.r.photosBroken; })
           .map(function (x) { return { row: x.row, title: x.r.title }; })
         : [];
-      return { me: clone(currentUser), config: clone(CONFIG), version: 'demo', brokenRows: brokenRows };
+      // 與 GAS 相同：名單只回筆數與是否有重複綽號，不回任何姓名
+      return { me: clone(currentUser), config: clone(CONFIG), version: 'demo', brokenRows: brokenRows,
+        roster: { count: DEMO_ROSTER.filter(function (s) { return s.active; }).length, total: DEMO_ROSTER.length, hasDuplicateNicknames: true },
+        ai: { enabled: true, demo: true, rosterReady: demoRosterActive() } };
     },
 
     listRecords: function (p) {
@@ -286,9 +390,19 @@ WC.demo = (function () {
     },
 
     getPhotos: function (p) {
+      // 與 GAS 相同：總量超過回應上限時，其餘 ID 放進 deferred；第一張一定回傳
       const out = {};
-      (p.ids || []).forEach(function (id) { out[id] = photoStore[id] || null; });
-      return { photos: out };
+      const deferred = [];
+      let total = 0;
+      (p.ids || []).forEach(function (id) {
+        if (deferred.length) { deferred.push(id); return; }
+        const url = photoStore[id] || null;
+        const size = url ? url.length : 0;
+        if (total > 0 && total + size > demoResponseLimit) { deferred.push(id); return; }
+        total += size;
+        out[id] = url;
+      });
+      return { photos: out, deferred: deferred };
     }
   };
 
@@ -312,8 +426,17 @@ WC.demo = (function () {
     return addFakePhotos([label || '測試'])[0];
   }
 
+  /** 回測用：示範 AI 的呼叫次數、指定下一次失敗 */
+  function aiCalls() { return demoAiCalls; }
+  function aiFailNext(code) { demoAiNext = { error: code }; }
+  /** 回測用：模擬名單空白（true）或恢復（false）；之後切換一次示範身分重新載入 */
+  function rosterEmpty(on) { demoRosterOff = !!on; }
+
+  /** 回測用：調整模擬的 getPhotos 回應上限（測試 deferred 分批） */
+  function setResponseLimit(n) { demoResponseLimit = Number(n) > 0 ? Number(n) : 6 * 1024 * 1024; }
+
   /** 回測用：查看某張照片的模擬標記 */
   function photoTag(fileId) { return photoMeta[fileId] ? clone(photoMeta[fileId]) : null; }
 
-  return { handle: handle, setUser: setUser, getUserKey: getUserKey, setConfig: setConfig, markBroken: markBroken, repair: repair, photoTag: photoTag, fakeUpload: fakeUpload };
+  return { handle: handle, setUser: setUser, getUserKey: getUserKey, setConfig: setConfig, markBroken: markBroken, repair: repair, photoTag: photoTag, fakeUpload: fakeUpload, setResponseLimit: setResponseLimit, aiCalls: aiCalls, aiFailNext: aiFailNext, rosterEmpty: rosterEmpty };
 })();

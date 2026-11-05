@@ -8,6 +8,9 @@ WC.app = (function () {
   async function start() {
     WC.records.bind();
     WC.editor.bind();
+    WC.layout.bind();
+    WC.printview.bind();
+    WC.ai.bind();
     bindHeader();
     WC.state.month = readMonthFromUrl() || U.currentMonth();
 
@@ -30,6 +33,8 @@ WC.app = (function () {
       const b = await WC.api.bootstrap();
       WC.state.me = b.me;
       WC.state.config = b.config;
+      WC.state.ai = b.ai || { enabled: false };
+      WC.state.roster = b.roster || null; // 只有筆數與是否有重複稱呼，沒有姓名
       renderBrokenBanner(b.me, b.brokenRows || []);
       document.title = b.config.newsletterName + '｜' + b.config.className;
       U.$('#brand-name').textContent = b.config.newsletterName;
@@ -70,18 +75,46 @@ WC.app = (function () {
   }
 
   /** 重新向後端要該月紀錄並重畫 */
-  async function reload() {
-    U.$('#month-label').textContent = U.monthLabel(WC.state.month);
-    U.$('#month-input').value = WC.state.month;
-    U.$('#record-list').innerHTML = '<div class="empty">載入中…</div>';
+  /**
+   * 重新向後端要該月紀錄並重畫。
+   * 合併呼叫（Gemini 審查）：同一時間只跑一次；進行中又被呼叫，就標記「結束後再跑一次」，
+   * 全部跑完才重畫一次。所有呼叫者拿到同一個 Promise，resolve 時畫面已是最後狀態。
+   */
+  let reloading = null;
+  let reloadAgain = false;
+  let reloadCount = 0;   // 回測用：實際呼叫 listRecords 的次數
+  let loadedMonth = '';
+
+  function reload() {
+    if (reloading) { reloadAgain = true; return reloading; }
+    reloading = (async function () {
+      do {
+        reloadAgain = false;
+        await loadOnce();
+      } while (reloadAgain);
+      WC.records.clearDone();
+      render();
+    })().finally(function () { reloading = null; });
+    return reloading;
+  }
+
+  async function loadOnce() {
+    const month = WC.state.month;
+    U.$('#month-label').textContent = U.monthLabel(month);
+    U.$('#month-input').value = month;
+    // 只有換月份（或第一次）才清成「載入中…」；同月重載保留卡片，避免連點時按鈕消失
+    if (month !== loadedMonth) U.$('#record-list').innerHTML = '<div class="empty">載入中…</div>';
+    reloadCount += 1;
     try {
-      const res = await WC.api.listRecords(WC.state.month);
+      const res = await WC.api.listRecords(month);
+      if (month !== WC.state.month) { reloadAgain = true; return; } // 途中換了月份：丟棄並重跑
       WC.state.records = res.records;
+      loadedMonth = month;
     } catch (e) {
       WC.state.records = [];
+      loadedMonth = '';
       U.toast('讀取紀錄失敗：' + U.errMsg(e), 'error');
     }
-    render();
   }
 
   function render() {
@@ -93,10 +126,16 @@ WC.app = (function () {
       t.setAttribute('aria-selected', on);
     });
     U.$all('.panel').forEach(function (p) { p.hidden = p.id !== 'panel-' + WC.state.tab; });
+    WC.printview.refreshIfVisible(); // 只在六頁編排分頁顯示時排 A4 預覽
     const isEditor = WC.state.me && WC.state.me.role === '主編';
     U.$('#role-hint').textContent = isEditor
-      ? '您是主編：可編輯全部紀錄，並決定「已採用／不採用」。'
-      : '您是老師：可新增紀錄、編輯自己的草稿與已確認紀錄；「已採用／不採用」由主編決定。';
+      ? '您是主編：在卡片上按「採用／不採用」即可決定；到「六頁編排」可把素材移到別頁。'
+      : '';
+    U.$('#role-hint').hidden = !isEditor;
+    const t = U.todayStr();
+    U.$('#hero-today').textContent = t.slice(0, 7) === WC.state.month
+      ? '今天 ' + U.dateLabel(t)
+      : '正在看 ' + U.monthLabel(WC.state.month) + '（新增時日期預設該月 1 日）';
   }
 
   /** 儲存後：若紀錄被歸到別的月份，切過去，讓使用者看得到 */
@@ -142,7 +181,7 @@ WC.app = (function () {
     });
   }
 
-  return { start: start, reload: reload, render: render, afterSave: afterSave };
+  return { start: start, reload: reload, render: render, afterSave: afterSave, reloadCount: function () { return reloadCount; } };
 })();
 
 document.addEventListener('DOMContentLoaded', WC.app.start);

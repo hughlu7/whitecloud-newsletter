@@ -6,10 +6,15 @@
   <meta name="referrer" content="strict-origin-when-cross-origin">
   <meta name="robots" content="noindex, nofollow">
   <!-- CSP：只允許本站與 Google 登入／Apps Script；禁止 inline script（XSS 縱深防禦） -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self' data: blob:; connect-src 'self' https://script.google.com https://script.googleusercontent.com https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://script.google.com https://script.googleusercontent.com https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; object-src 'none'; base-uri 'self'; form-action 'none'">
   <title>白雲家訊</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="css/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- 列印標題用 Huninn（jf 粉圓）、內文 Noto Sans TC；連不上 Google Fonts 時自動用後備字型，頁數不變 -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Huninn&family=Noto+Sans+TC:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="css/print.css">
 </head>
 <body>
   <!-- 示範模式提示列 -->
@@ -50,7 +55,6 @@
         <div><div id="brand-name" class="brand-name">白雲家訊</div><div id="brand-class" class="brand-class"></div></div>
       </div>
       <div class="month-picker" aria-label="製作月份">
-        <span class="mp-label">製作月份</span>
         <button type="button" id="month-prev" class="icon-btn" aria-label="上個月">‹</button>
         <strong id="month-label"></strong>
         <button type="button" id="month-next" class="icon-btn" aria-label="下個月">›</button>
@@ -59,7 +63,6 @@
       <div class="top-actions">
         <span id="who" class="who"></span>
         <button type="button" id="btn-signout" class="btn btn-signout">登出</button>
-        <button type="button" id="btn-new" class="btn btn-primary">＋ 新增活動紀錄</button>
       </div>
     </header>
 
@@ -68,64 +71,86 @@
     <nav class="tabs" role="tablist">
       <button type="button" class="tab on" role="tab" data-tab="library">本月素材</button>
       <button type="button" class="tab" role="tab" data-tab="pages">六頁編排</button>
-      <button type="button" class="tab" role="tab" data-tab="guide">版型手冊</button>
     </nav>
 
     <main>
       <!-- 本月素材 -->
       <section id="panel-library" class="panel">
-        <div class="stats">
-          <div class="stat"><span id="stat-records">0</span><small>活動紀錄</small></div>
-          <div class="stat"><span id="stat-photos">0</span><small>照片張數</small></div>
-          <div class="stat"><span id="stat-used">0</span><small>已採用素材</small></div>
+        <!-- 主要動作：寬螢幕在最上方；手機固定在畫面底部（同一顆按鈕，CSS 決定位置） -->
+        <div class="hero">
+          <div class="hero-text">
+            <p id="hero-today" class="hero-today"></p>
+            <p class="hero-sub">拍幾張照片、說幾句話，就完成一筆。</p>
+          </div>
+          <div class="new-bar">
+            <button type="button" id="btn-new" class="btn btn-primary btn-new">＋ 記錄今天的活動</button>
+          </div>
         </div>
+
+        <p class="stats-line" aria-live="polite">
+          本月 <b id="stat-records">0</b> 筆 · 照片 <b id="stat-photos">0</b> 張 · 已採用 <b id="stat-used">0</b> 筆<span id="stat-pending-wrap" hidden> · <span class="pending-pill">待挑選 <b id="stat-pending">0</b> 筆</span></span>
+        </p>
         <p id="role-hint" class="role-hint"></p>
         <div class="filters">
-          <div id="unit-filter" class="chips" aria-label="依家訊單元篩選"></div>
+          <div class="chips-wrap" id="unit-filter-wrap">
+            <div id="unit-filter" class="chips" aria-label="依家訊單元篩選"></div>
+            <button type="button" class="chips-more" id="unit-filter-more" aria-label="還有更多單元，往右捲" tabindex="-1">›</button>
+          </div>
           <label class="status-filter">狀態
             <select id="status-filter">
               <option value="">全部</option>
-              <option>草稿</option><option>已確認</option><option>已採用</option><option>不採用</option>
+              <option value="草稿">草稿</option><option value="已確認">已送出</option><option value="已採用">已採用</option><option value="不採用">不採用</option>
             </select>
           </label>
         </div>
-        <div id="record-list" class="cards"></div>
+        <div id="record-list"></div>
       </section>
 
-      <!-- 六頁編排（第 1 階段：總覽） -->
+      <!-- 六頁編排（第 1 階段：總覽＋主編移動素材） -->
       <section id="panel-pages" class="panel" hidden>
-        <div class="stage-note">第 1 階段先顯示各單元的採用狀況與建議版型；A4 六頁排版、下載編排文字稿、列印 PDF 將在第 3 階段開放。</div>
+        <div class="pages-top">
+          <p class="stage-note">一個單元一頁，共六頁。<span id="pages-role-note"></span>下方是 A4 列印預覽。</p>
+          <p class="print-reminder">列印請用下方「🖨 列印／另存 PDF」按鈕；直接按 Ctrl+P（⌘P）會略過肖像同意與待處理內容的確認。</p>
+          <details class="help-pop">
+            <summary aria-label="版型與視覺語言說明">?</summary>
+            <div class="help-body">
+              <h3>三種版型</h3>
+              <div class="layout-cards static">
+                <div class="lc"><span class="lc-ico story" aria-hidden="true"><i class="p big"></i><i class="l"></i></span><b>故事版</b><small>一張主照片＋完整敘述</small></div>
+                <div class="lc"><span class="lc-ico album" aria-hidden="true"><i class="p"></i><i class="p"></i><i class="p"></i><i class="p"></i></span><b>相簿版</b><small>多張照片＋一句圖說</small></div>
+                <div class="lc"><span class="lc-ico explore" aria-hidden="true"><i class="s"></i><i class="a">→</i><i class="s"></i><i class="a">→</i><i class="s"></i></span><b>探索版</b><small>嘗試→發現→調整</small></div>
+              </div>
+              <h3>視覺語言</h3>
+              <ul>
+                <li><span class="sw sky"></span>天空藍、<span class="sw cream"></span>奶油黃、<span class="sw peach"></span>柔和橘</li>
+                <li>圓角照片、清楚的小標題、溫暖具體的文字</li>
+                <li>固定六頁，一個單元一頁；內容過多時精簡或拆到下個月</li>
+              </ul>
+            </div>
+          </details>
+        </div>
         <div id="pages-orphans" class="orphan-note" role="status" hidden></div>
         <div id="pages-body" class="pages-grid"></div>
-      </section>
+        <section id="pages-pool" class="pool" hidden></section>
 
-      <!-- 版型手冊 -->
-      <section id="panel-guide" class="panel" hidden>
-        <div class="guide-grid">
-          <article class="guide-card">
-            <h3>故事版</h3>
-            <div class="guide-demo story"><div class="g-photo big"></div><div class="g-lines"><i></i><i></i><i></i><i></i></div></div>
-            <p>一張主照片＋完整敘述。適合一次深入的活動，寫出孩子的表情、對話與轉變。</p>
-          </article>
-          <article class="guide-card">
-            <h3>相簿版</h3>
-            <div class="guide-demo album"><div class="g-photo"></div><div class="g-photo"></div><div class="g-photo"></div><div class="g-photo"></div></div>
-            <p>多張照片＋短圖說。適合體能活動、節慶等畫面豐富的主題，每張一句話就好。</p>
-          </article>
-          <article class="guide-card">
-            <h3>探索版</h3>
-            <div class="guide-demo explore"><span>嘗試</span><b>→</b><span>發現</span><b>→</b><span>調整</span></div>
-            <p>依「嘗試→發現→調整」的順序呈現。適合學習區、科學探索，讓家長看見思考歷程。</p>
-          </article>
-        </div>
-        <div class="guide-rules">
-          <h3>視覺語言</h3>
-          <ul>
-            <li><span class="sw sky"></span>天空藍、<span class="sw cream"></span>奶油黃、<span class="sw peach"></span>柔和橘</li>
-            <li>圓角照片、清楚的小標題、溫暖具體的文字</li>
-            <li>固定六頁，一個單元一頁；內容過多時精簡或拆到下個月</li>
-          </ul>
-        </div>
+        <!-- A4 預覽與列印（第 3 階段） -->
+        <section class="print-panel" aria-labelledby="print-h">
+          <div class="print-bar">
+            <h3 id="print-h">A4 列印預覽</h3>
+            <label id="print-empty-mode" class="field-inline" hidden>空單元
+              <select id="print-empty-mode-sel">
+                <option value="keep">保留一頁（休息中）</option>
+                <option value="hide">隱藏（頁數變少）</option>
+              </select>
+            </label>
+            <button type="button" id="btn-print-md" class="btn">⬇ 下載編排文字稿</button>
+            <button type="button" id="btn-print" class="btn btn-primary">🖨 列印／另存 PDF</button>
+            <p id="print-status" class="print-status" role="status" aria-live="polite"></p>
+            <p id="print-sum" class="print-sum" aria-live="polite"></p>
+            <ul id="print-issues" class="print-issues" hidden></ul>
+          </div>
+          <div id="print-root"><main class="sheets" id="print-sheets"></main></div>
+        </section>
       </section>
     </main>
   </div>
@@ -135,71 +160,155 @@
     <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="editor-title">
       <form id="editor-form" novalidate>
         <header class="modal-head">
-          <h2 id="editor-title">新增活動紀錄</h2>
+          <h2 id="editor-title">記錄今天的活動</h2>
           <button type="button" id="editor-close" class="icon-btn" aria-label="關閉">✕</button>
         </header>
+        <!-- 手機逐步模式的步驟列（寬螢幕隱藏，三步並排） -->
+        <nav class="stepper" aria-label="步驟">
+          <button type="button" class="step-dot" data-go="1"><span>1</span>照片</button>
+          <button type="button" class="step-dot" data-go="2"><span>2</span>說一說</button>
+          <button type="button" class="step-dot" data-go="3"><span>3</span>送出</button>
+        </nav>
         <div class="modal-body">
           <p id="editor-broken-note" class="broken-note" role="alert" hidden>這筆紀錄的照片資料損壞，暫時無法編輯或刪除，請聯絡管理者修正試算表。</p>
           <p id="editor-readonly-note" class="readonly-note" hidden>這筆紀錄不是您可以修改的（他人投稿，或已由主編定案），僅供檢視。</p>
-          <p id="editor-author" class="muted"></p>
-          <div class="row">
-            <label class="grow"><span>標題 <em>*</em> <small class="counter" data-count-for="title"></small></span>
-              <input name="title" required maxlength="60" placeholder="例：秋天的落葉拼貼">
-            </label>
-            <label><span>活動日期 <em>*</em></span>
-              <input name="date" type="date" required>
-            </label>
-            <label><span>家訊單元 <em>*</em></span>
-              <select name="unit" required></select>
-            </label>
+          <p id="editor-author" class="muted small"></p>
+          <p id="editor-lock-hint" class="lock-hint" hidden>送出後，主編採用（或不採用）這筆紀錄，就不能再修改。</p>
+
+          <div class="editor-grid">
+            <section class="step step-photo" data-step="1" aria-labelledby="step1-h">
+              <h3 id="step1-h" class="step-h"><span class="num">1</span>加照片 <span id="photo-count" class="muted small"></span></h3>
+              <label id="photo-pick" class="drop-zone">
+                <span class="dz-ico" aria-hidden="true">📷</span>
+                <span class="dz-main">拍照或選照片</span>
+                <span class="dz-sub">可一次選多張<span class="desk-only">，也可以把照片拖進來</span></span>
+                <input id="photo-input" type="file" accept="image/*" multiple class="visually-hidden">
+              </label>
+              <div id="photo-status" class="muted small" aria-live="polite"></div>
+              <div id="photo-grid" class="photo-grid"></div>
+              <button type="button" id="photo-undo" class="btn-link" hidden>↶ 復原剛才移除的照片</button>
+            </section>
+
+            <section class="step step-text" data-step="2" aria-labelledby="step2-h">
+              <h3 id="step2-h" class="step-h"><span class="num">2</span>說一說，或打幾句</h3>
+              <button type="button" id="btn-speech" class="btn btn-speech">🎙 按這裡用說的</button>
+              <span id="speech-live" class="speech-live" aria-live="polite"></span>
+              <label class="field"><span class="visually-hidden">原始紀錄</span>
+                <textarea name="rawText" rows="6" data-maxchars="5000" placeholder="今天看到的、孩子說的話，直接記下來就好。"></textarea>
+              </label>
+              <p class="field-meta"><small class="counter" data-count-for="rawText"></small><span id="speech-note" class="muted small"></span></p>
+              <!-- 第 2 階段：AI 整理（後端未設定 AI 時整塊隱藏） -->
+              <div id="ai-box" class="ai-box" hidden>
+                <button type="button" id="btn-ai" class="btn btn-ai" disabled>✨ AI 幫我整理</button>
+                <span id="ai-status" class="muted small" role="status" aria-live="polite"></span>
+                <p id="ai-roster-note" class="ai-roster-note" role="status" hidden></p>
+                <p class="muted small ai-hint">會把學生名字換成代號再送出；口述內容請先確認名字有沒有被辨識成別的字。想指定是哪位孩子，可以寫成 [[王小明]]。</p>
+                <div id="ai-confirm" class="ai-confirm" role="alertdialog" aria-labelledby="ai-confirm-h" hidden>
+                  <p id="ai-confirm-h"><b>送出前請確認：</b></p>
+                  <ul id="ai-confirm-list"></ul>
+                  <div id="ai-candidates" class="ai-candidates" hidden></div>
+                  <div class="ai-actions">
+                    <button type="button" id="ai-confirm-go" class="btn btn-primary">照樣送出</button>
+                    <button type="button" id="ai-confirm-back" class="btn">回去修改</button>
+                  </div>
+                </div>
+                <div id="ai-overwrite" class="ai-confirm" role="alertdialog" aria-labelledby="ai-overwrite-h" hidden>
+                  <p id="ai-overwrite-h"><b>摘要、文案或圖說已經有內容，要用 AI 的結果覆蓋嗎？</b></p>
+                  <div class="ai-actions">
+                    <button type="button" id="ai-overwrite-yes" class="btn btn-primary">覆蓋</button>
+                    <button type="button" id="ai-overwrite-empty" class="btn">只填空白的欄位</button>
+                    <button type="button" id="ai-overwrite-no" class="btn">不要</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="step step-send" data-step="3" aria-labelledby="step3-h">
+              <h3 id="step3-h" class="step-h"><span class="num">3</span>選單元、送出</h3>
+              <fieldset class="unit-pick">
+                <legend class="visually-hidden">家訊單元</legend>
+                <p id="unit-confirm-note" class="unit-confirm-note" role="status" hidden></p>
+                <div id="unit-options" class="unit-options"></div>
+              </fieldset>
+              <div class="row">
+                <label class="field"><span>活動日期</span>
+                  <input name="date" type="date" required>
+                </label>
+                <label class="field grow"><span>標題 <small class="muted">（可留空）</small> <small class="counter" data-count-for="title"></small></span>
+                  <input name="title" data-maxchars="60" autocomplete="off">
+                </label>
+              </div>
+            </section>
+
+            <details id="advanced" class="advanced">
+              <summary><span class="adv-label">進階</span> <span id="adv-preview" class="muted small"></span></summary>
+              <div class="adv-body">
+                <fieldset class="layout-pick">
+                  <legend>版型 <small id="layout-mode" class="muted"></small></legend>
+                  <div id="layout-options" class="layout-cards"></div>
+                </fieldset>
+                <!-- AI 填入後的提醒放在進階區（手機逐步模式填入後會跳到第 3 步，這裡才看得到） -->
+                <ul id="ai-warnings" class="ai-warnings" role="status" hidden></ul>
+                <div id="photo-meta-wrap" class="photo-meta-wrap" hidden>
+                  <h4>照片圖說與備註 <small class="muted">（可不填；圖說印在相簿版照片下方，備註只給 AI 和老師參考）</small></h4>
+                  <ol id="photo-meta" class="photo-meta"></ol>
+                </div>
+                <label class="field"><span>活動摘要 <small class="counter" data-count-for="summary"></small></span>
+                  <textarea name="summary" rows="2" data-maxchars="500" placeholder="一兩句話說明這個活動（可不填）"></textarea>
+                </label>
+                <label class="field"><span>家訊文案 <small class="counter" data-count-for="newsletter"></small></span>
+                  <textarea name="newsletter" rows="4" data-maxchars="2000" placeholder="要給家長看的文字（可不填，主編編排時再寫）"></textarea>
+                </label>
+                <label id="status-wrap" class="field" hidden><span>處理狀態（主編）</span>
+                  <select name="status"></select>
+                </label>
+                <button type="button" id="btn-delete" class="btn btn-danger">刪除這筆紀錄</button>
+              </div>
+            </details>
           </div>
-
-          <label><span>原始紀錄 <small class="counter" data-count-for="rawText"></small></span>
-            <textarea name="rawText" rows="6" maxlength="5000" placeholder="把今天看到的、孩子說的話直接記下來，不用修飾。可以按「開始口述」用說的。"></textarea>
-          </label>
-          <div class="speech-row">
-            <button type="button" id="btn-speech" class="btn">🎙 開始口述</button>
-            <span id="speech-live" class="speech-live" aria-live="polite"></span>
-          </div>
-          <p id="speech-note" class="muted small"></p>
-
-          <div class="ai-row">
-            <button type="button" id="btn-ai" class="btn" disabled>✨ AI 整理摘要與文案</button>
-            <span class="stage-tag">第 2 階段開放</span>
-          </div>
-
-          <p class="field-hint">「活動摘要」與「家訊文案」目前請自行填寫（可先留白）；第 2 階段起，AI 會依原始紀錄幫忙產生草稿。</p>
-          <label><span>活動摘要 <small class="counter" data-count-for="summary"></small></span>
-            <textarea name="summary" rows="2" maxlength="500" placeholder="一兩句話說明這個活動"></textarea>
-          </label>
-          <label><span>家訊文案 <small class="counter" data-count-for="newsletter"></small></span>
-            <textarea name="newsletter" rows="5" maxlength="2000" placeholder="要給家長看的文字"></textarea>
-          </label>
-
-          <fieldset class="photo-field">
-            <legend>活動照片 <span id="photo-count" class="muted"></span></legend>
-            <label id="photo-pick" class="btn photo-pick">＋ 加入活動照片
-              <input id="photo-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
-            </label>
-            <span class="muted small">JPG／PNG／WebP，每張 10MB 內，最多 20 張；會先在您的電腦壓縮到約 300KB 再上傳。</span>
-            <div id="photo-status" class="muted small" aria-live="polite"></div>
-            <div id="photo-grid" class="photo-grid"></div>
-            <button type="button" id="photo-undo" class="btn-link" hidden>↶ 復原剛才移除的照片</button>
-          </fieldset>
-
-          <div class="row">
-            <label>偏好版型 <select name="layout"></select></label>
-            <label>處理狀態 <select name="status"></select></label>
-          </div>
-          <p class="field-hint">文字與照片都整理好、可以給主編挑選時，把狀態改成「已確認」；「已採用／不採用」由主編決定。</p>
         </div>
         <footer class="modal-foot">
           <span id="editor-footer-info" class="foot-info"></span>
-          <button type="button" id="btn-delete" class="btn btn-danger">刪除</button>
-          <button type="button" id="btn-cancel" class="btn">取消</button>
-          <button type="submit" id="btn-save" class="btn btn-primary">儲存</button>
+          <button type="button" id="btn-prev" class="btn btn-step">← 上一步</button>
+          <button type="button" id="btn-draft" class="btn">只存草稿</button>
+          <button type="button" id="btn-cancel" class="btn">關閉</button>
+          <button type="button" id="btn-next" class="btn btn-primary btn-step">下一步 →</button>
+          <button type="submit" id="btn-save" class="btn btn-primary">送出</button>
         </footer>
       </form>
+
+      <!-- 關閉時詢問（存成草稿／放棄） -->
+      <div id="leave-ask" class="leave-ask" role="alertdialog" aria-modal="true" aria-labelledby="leave-ask-title" hidden>
+        <div class="leave-box">
+          <p id="leave-ask-title" class="leave-title">還沒送出，要怎麼處理？</p>
+          <p id="leave-ask-note" class="muted small"></p>
+          <div class="leave-actions">
+            <button type="button" id="leave-save" class="btn btn-primary">存成草稿</button>
+            <button type="button" id="leave-discard" class="btn btn-danger">放棄</button>
+            <button type="button" id="leave-back" class="btn">繼續編輯</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 列印前確認（頁內對話框，不用 confirm()） -->
+  <div id="print-confirm" class="modal print-confirm" hidden>
+    <div class="modal-box confirm-box" role="alertdialog" aria-modal="true" aria-labelledby="print-confirm-h" aria-describedby="print-confirm-body">
+      <h2 id="print-confirm-h">列印前確認</h2>
+      <div id="print-confirm-body">
+        <p id="print-confirm-cut" class="confirm-cut" hidden></p>
+        <p id="print-confirm-todo" class="confirm-cut" hidden></p>
+        <ul id="print-confirm-todo-list" class="confirm-list bad" hidden></ul>
+        <p id="print-confirm-caps" class="confirm-warn" hidden></p>
+        <ul id="print-confirm-caps-list" class="confirm-list warn" hidden></ul>
+        <p>請確認照片中的學生都已簽肖像同意（未同意者請遮臉或換照片）。</p>
+        <p>要傳給家長的話，列印時選「另存為 PDF」。</p>
+      </div>
+      <div class="confirm-actions">
+        <button type="button" id="print-confirm-cancel" class="btn">取消</button>
+        <button type="button" id="print-confirm-go" class="btn btn-primary">繼續列印</button>
+      </div>
     </div>
   </div>
 
@@ -215,8 +324,14 @@
   <script src="js/image.js"></script>
   <script src="js/speech.js"></script>
   <script src="js/records.js"></script>
+  <script src="js/privacy-terms.js"></script>
+  <script src="js/printcheck.js"></script>
+  <script src="js/print.js"></script>
+  <script src="js/printview.js"></script>
   <script src="js/layout.js"></script>
+  <script src="js/viewer.js"></script>
   <script src="js/editor.js"></script>
+  <script src="js/ai.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

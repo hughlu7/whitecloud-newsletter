@@ -1,0 +1,238 @@
+/* 由 whitecloud-design/print/print.css 整合（v2.0）：所有選擇器限定在 #print-root 內，:root 變數改掛在 #print-root；
+ * html／body 規則移除（由 style.css 負責）；列印時只顯示 #print-root 的規則在 style.css 的 @media print。 */
+/* 白雲家訊 — A4 六頁列印版型（天空藍、奶油黃、柔和橘）
+ * 單位一律用 mm／pt：螢幕預覽與列印用同一組尺寸，螢幕上量到放得下，印出來就放得下。
+ * 整合時只需引入本檔與 print.js；畫面上的 .pv-* 工具列樣式只在螢幕顯示。 */
+
+#print-root {
+  --sky: #5aa9e6;
+  --sky-deep: #2f7fc1;
+  --sky-soft: #e6f3fc;
+  --cream: #fff6d8;
+  --cream-deep: #f6e3a1;
+  --peach: #f7a46b;
+  --peach-deep: #c8622a;
+  --peach-soft: #fde7d6;
+  --ink: #2c3e50;
+  --muted: #5d6d7c;      /* 比畫面版略深，黑白影印仍看得清 */
+  --line: #c9d8e6;
+  --danger: #d9534f;
+  --warn: #b7791f;
+
+  --font-title: "Huninn", "jf-openhuninn-2.0", "LXGW WenKai TC", "Noto Sans TC", "Microsoft JhengHei", "PingFang TC", sans-serif;
+  --font-body: "Noto Sans TC", "Microsoft JhengHei", "PingFang TC", "Heiti TC", sans-serif;
+
+  --sheet-w: 210mm;
+  --sheet-h: 297mm;
+  --pad-x: 13mm;
+  --pad-top: 11mm;
+  --pad-bottom: 9mm;
+  --photo-r: 3.5mm;
+}
+
+#print-root * { box-sizing: border-box; }
+/* （整合時移除：html, body） */
+/* （整合時移除：body） */
+
+/* ---------- A4 頁面 ---------- */
+@page { size: A4 portrait; margin: 0; }   /* 邊界由 .sheet 內距控制；margin 0 也讓瀏覽器不印網址與日期 */
+
+#print-root .sheets { display: flex; flex-direction: column; align-items: center; gap: 10mm; padding: 8mm 0 16mm; }
+#print-root .sheet {
+  position: relative;
+  width: var(--sheet-w); height: var(--sheet-h);
+  padding: var(--pad-top) var(--pad-x) var(--pad-bottom);
+  background: #fff;
+  overflow: hidden;                      /* 任何超量內容都不會長出第七頁 */
+  display: flex; flex-direction: column;
+  box-shadow: 0 2px 14px rgba(30, 60, 90, .18);
+  -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  break-after: page; page-break-after: always;
+  break-inside: avoid; page-break-inside: avoid;
+}
+#print-root .sheet:last-child { break-after: auto; page-break-after: auto; }
+
+/* 角落雲朵裝飾（淺色，影印後只剩淡灰，不干擾內容） */
+#print-root .sheet::before {
+  content: ""; position: absolute; right: -14mm; top: -10mm; width: 70mm; height: 34mm;
+  background:
+    radial-gradient(circle at 30% 70%, var(--sky-soft) 0 9mm, transparent 9.2mm),
+    radial-gradient(circle at 55% 45%, var(--sky-soft) 0 13mm, transparent 13.2mm),
+    radial-gradient(circle at 80% 70%, var(--sky-soft) 0 10mm, transparent 10.2mm);
+  z-index: 0; pointer-events: none;
+}
+#print-root .sheet > * { position: relative; z-index: 1; }
+
+/* ---------- 頁眉 ---------- */
+#print-root .pg-head { flex: none; margin-bottom: 4mm; }
+#print-root .pg-meta { display: flex; justify-content: space-between; align-items: center; font-size: 9.5pt; color: var(--muted); letter-spacing: .04em; }
+#print-root .pg-meta b { color: var(--ink); font-weight: 700; }
+#print-root .pg-no { font-family: var(--font-title); font-size: 11pt; color: var(--ink); background: var(--cream); border: .35mm solid var(--cream-deep);
+  border-radius: 99mm; padding: .4mm 3.2mm; }
+#print-root .pg-title { display: flex; align-items: center; gap: 3mm; margin: 2.2mm 0 0; padding-bottom: 2.6mm;
+  border-bottom: .5mm dashed var(--sky); }
+#print-root .pg-title h1 { margin: 0; font-family: var(--font-title); font-weight: 400; font-size: 21pt; line-height: 1.2; color: var(--ink); }
+#print-root .pg-badge { flex: none; width: 10mm; height: 10mm; border-radius: 50%; background: var(--peach-soft); border: .5mm solid var(--peach);
+  display: grid; place-items: center; font-family: var(--font-title); font-size: 13pt; color: var(--peach-deep); }
+#print-root .pg-count { margin-left: auto; font-size: 9.5pt; color: var(--muted); }
+
+/* ---------- 頁尾 ---------- */
+#print-root .pg-foot { flex: none; margin-top: 4mm; padding-top: 2.4mm; border-top: .35mm solid var(--line);
+  display: flex; justify-content: space-between; align-items: center; font-size: 9.5pt; color: var(--muted); }
+#print-root .pg-foot .slogan { font-family: var(--font-title); font-size: 11pt; color: var(--sky-deep); }
+#print-root .pg-foot .slogan::before { content: "☁ "; color: var(--sky); }
+
+/* ---------- 內容區：1／2／3 筆 ---------- */
+#print-root .pg-body { flex: 1 1 auto; min-height: 0; display: grid; gap: 5mm; }
+#print-root .pg-body.n1 { grid-template-rows: 1fr; }
+#print-root .pg-body.n2 { grid-template-rows: 1fr 1fr; }
+#print-root .pg-body.n3 { grid-template-rows: 1fr 1fr 1fr; gap: 4mm; }
+#print-root .pg-body.n2 > .slot + .slot, #print-root .pg-body.n3 > .slot + .slot { border-top: .4mm dashed var(--line); padding-top: 4mm; }
+#print-root .pg-body.n3 > .slot + .slot { padding-top: 3.2mm; }
+
+#print-root .slot { position: relative; min-height: 0; overflow: hidden; display: flex; flex-direction: column;
+  --fs: 12pt; --lh: 1.75; }
+#print-root .slot.s-half { --fs: 11.5pt; --lh: 1.7; }
+#print-root .slot.s-third { --fs: 11pt; --lh: 1.65; }
+
+/* 每筆的小標題列 */
+#print-root .it-head { flex: none; display: flex; align-items: baseline; gap: 2.5mm; margin: 0 0 2.4mm; }
+#print-root .it-title { margin: 0; font-family: var(--font-title); font-weight: 400; font-size: 17pt; line-height: 1.25; color: var(--ink); }
+#print-root .s-half .it-title { font-size: 15.5pt; }
+#print-root .s-third .it-title { font-size: 14pt; }
+#print-root .it-title::before { content: ""; display: inline-block; width: 2.4mm; height: 2.4mm; border-radius: 50%; background: var(--peach);
+  margin-right: 2mm; vertical-align: .25em; }
+#print-root .it-date { flex: none; font-size: 9.5pt; color: var(--sky-deep); background: var(--sky-soft); border-radius: 99mm; padding: .2mm 2.6mm;
+  white-space: nowrap; }
+
+/* 內文 */
+#print-root .txt { font-size: var(--fs); line-height: var(--lh); text-align: justify; text-justify: inter-character;
+  text-wrap: pretty; line-break: strict; word-break: normal; overflow-wrap: anywhere; }
+#print-root .txt p { margin: 0 0 .45em; }
+#print-root .txt p:last-child { margin-bottom: 0; }
+#print-root .nw { white-space: nowrap; }
+#print-root .phr { display: inline-block; }                /* 段落最後幾個字綁在一起，避免最後一行只剩一個字 */
+/* 超量截斷：整行截斷並以…結尾（由 print.js clampToFit 設定行數） */
+#print-root .txt.clamped { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+#print-root .txt.clamped p { display: inline; }
+#print-root .txt.clamped p + p::before { content: "\A"; white-space: pre; }
+
+/* 照片 */
+#print-root .ph { position: relative; margin: 0; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+#print-root .ph .img { position: relative; flex: 1 1 auto; min-height: 0; border-radius: var(--photo-r); overflow: hidden; background: var(--sky-soft);
+  border: .3mm solid var(--line); }
+/* 照片絕對定位：照片本身的像素大小不會撐開版面，格子多大就裁多大（cover＋焦點） */
+#print-root .ph img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: cover; }
+#print-root .ph figcaption { flex: none; font-size: 9.5pt; line-height: 1.35; color: var(--ink); padding: 1mm .5mm 0; text-align: center;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#print-root .ph figcaption .n { display: inline-block; min-width: 4.2mm; height: 4.2mm; line-height: 4.2mm; border-radius: 50%; margin-right: 1mm;
+  border: .3mm solid var(--muted); font-size: 8pt; text-align: center; vertical-align: .05em; }
+
+/* ---------- 故事版 ---------- */
+/* 整頁：橫照片在上；直照片在左、文字在右 */
+#print-root .story { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 4mm; }
+#print-root .story .main { flex: 1 1 auto; min-height: 90mm; max-height: 150mm; display: flex; gap: 3mm; }
+#print-root .story .main > .ph { flex: 1 1 auto; }
+#print-root .story .txt { flex: none; }
+#print-root .story .strip { flex: none; height: 36mm; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 3mm; }
+/* 兩張照片：並排當主照片，不放下方小條（小條只有一格時裁切太多） */
+#print-root .story.duo .main { max-height: 118mm; }
+#print-root .story.duo .main > .ph { flex: 1 1 0; }
+/* 直照片：上排「照片｜文字」並排，照片 3:4；其他照片排在下方一列 */
+#print-root .story.portrait .top { flex: 1 1 auto; min-height: 0; display: flex; gap: 5mm; align-items: flex-start; }
+#print-root .story.portrait .main { flex: 0 0 100mm; height: 133mm; min-height: 0; max-height: 100%; }
+#print-root .story.portrait .top .txt { flex: 1 1 auto; min-width: 0; }
+#print-root .story.nophoto .txt { flex: 1 1 auto; background: var(--cream); border-radius: 4mm; padding: 6mm 7mm; border: .35mm solid var(--cream-deep); }
+
+/* 半頁、三分之一頁：照片在一側、文字在另一側（左右交錯） */
+#print-root .side { flex: 1 1 auto; min-height: 0; display: flex; gap: 5mm; }
+#print-root .side .pics { flex: 0 0 44%; display: grid; gap: 2.5mm; min-height: 0; }
+#print-root .s-third .side .pics { flex-basis: 36%; }
+#print-root .side .pics.portrait { flex-basis: 34%; }
+#print-root .s-third .side .pics.portrait { flex-basis: 26%; }
+#print-root .side .pics.two { grid-template-rows: 1.6fr 1fr; }
+#print-root .side .body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+#print-root .side .body .txt { flex: 1 1 auto; }
+#print-root .slot.flip .side { flex-direction: row-reverse; }
+
+/* ---------- 相簿版 ---------- */
+#print-root .album { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 3mm; }
+#print-root .album .lead { flex: none; background: var(--cream); border-left: 1.4mm solid var(--cream-deep); border-radius: 0 3mm 3mm 0; padding: 2.2mm 4mm; }
+#print-root .grid { flex: 1 1 auto; min-height: 150mm; display: grid; gap: 2.8mm; grid-auto-rows: minmax(0, 1fr); }
+#print-root .grid.cap .ph figcaption { display: block; }
+#print-root .grid:not(.cap) .ph figcaption { display: none; }
+#print-root .grid.dense { gap: 2mm; }
+#print-root .grid.dense .ph .img { border-radius: 2.5mm; }
+#print-root .s-half .grid { min-height: 58mm; }
+#print-root .s-third .grid { min-height: 0; }
+/* 三分之一頁：引言在左、照片一排在右 */
+#print-root .album.row { flex-direction: row; gap: 4mm; }
+#print-root .album.row .lead { flex: 0 0 38%; align-self: stretch; }
+#print-root .album.row .grid { flex: 1 1 auto; }
+
+/* ---------- 探索版 ---------- */
+#print-root .explore { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 3mm; }
+#print-root .explore .intro { flex: none; }
+#print-root .explore .photos { flex: 1 1 auto; min-height: 60mm; max-height: 140mm; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3mm; }
+#print-root .steps { flex: none; display: grid; gap: 3mm; }
+#print-root .steps.cols { grid-template-columns: repeat(3, 1fr); flex: 1 1 auto; min-height: 0; }
+#print-root .step { position: relative; border-radius: 3.5mm; padding: 2.4mm 3.6mm 2.6mm; min-height: 0; overflow: hidden; background: #fff; }
+#print-root .step h3 { margin: 0 0 1mm; font-family: var(--font-title); font-weight: 400; font-size: 13pt; line-height: 1.3; display: flex; align-items: center; gap: 1.8mm; }
+#print-root .step h3 .num { flex: none; width: 6.4mm; height: 6.4mm; border-radius: 50%; display: grid; place-items: center; font-size: 10.5pt; color: #fff; background: var(--ink); }
+#print-root .step h3 small { font-family: var(--font-body); font-size: 8.5pt; color: var(--muted); }
+/* 黑白影印時靠「編號＋文字標籤＋邊框樣式」區分，不只靠顏色 */
+#print-root .step.try { border: .5mm solid var(--sky); background: var(--sky-soft); }
+#print-root .step.find { border: .5mm dashed var(--peach); background: var(--peach-soft); }
+#print-root .step.fix { border: .5mm dotted #c9a227; background: var(--cream); }
+#print-root .explore.side-x { flex-direction: row; gap: 5mm; }
+#print-root .explore.side-x .photos { flex: 0 0 36%; max-height: none; grid-auto-flow: row; grid-auto-rows: 1fr; }
+#print-root .explore.side-x .col { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2.4mm; }
+#print-root .explore.side-x .col .steps { flex: 1 1 auto; min-height: 0; grid-auto-rows: auto; align-content: start; }
+#print-root .slot.flip .explore.side-x { flex-direction: row-reverse; }
+#print-root .s-third .explore.side-x .photos { flex-basis: 24%; }
+
+/* ---------- 空單元 ---------- */
+#print-root .empty-unit { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6mm; text-align: center; }
+#print-root .empty-unit .cloud { width: 74mm; height: 40mm; position: relative; }
+#print-root .empty-unit .cloud i { position: absolute; border-radius: 50%; background: var(--sky-soft); border: .5mm dashed var(--sky); }
+#print-root .empty-unit .cloud i:nth-child(1) { width: 30mm; height: 30mm; left: 6mm; top: 10mm; }
+#print-root .empty-unit .cloud i:nth-child(2) { width: 38mm; height: 38mm; left: 20mm; top: 0; }
+#print-root .empty-unit .cloud i:nth-child(3) { width: 28mm; height: 28mm; left: 44mm; top: 12mm; }
+#print-root .empty-unit .cloud b { position: absolute; left: 0; right: 0; bottom: 3mm; font-family: var(--font-title); font-size: 13pt; color: var(--sky-deep); font-weight: 400; }
+#print-root .empty-unit p { margin: 0; max-width: 120mm; font-family: var(--font-title); font-size: 15pt; line-height: 1.7; color: var(--ink); }
+#print-root .empty-unit .note { font-family: var(--font-body); font-size: 10.5pt; color: var(--muted); }
+
+/* ---------- 主編提示（只在螢幕顯示） ---------- */
+#print-root .flag { position: absolute; z-index: 5; right: 0; top: 0; max-width: 62%; font-size: 8.5pt; line-height: 1.4; padding: .6mm 2.4mm;
+  border-radius: 0 1mm 0 2.4mm; font-family: var(--font-body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: help; }
+#print-root .flag:hover { white-space: normal; max-width: 100%; }
+#print-root .flag.red { background: rgba(217, 83, 79, .94); color: #fff; }
+#print-root .flag.yellow { background: rgba(255, 241, 200, .96); color: #6b4a08; border: .3mm solid #e6c46a; }
+#print-root .slot.is-over { outline: .8mm solid var(--danger); outline-offset: .6mm; border-radius: 1mm; }
+#print-root .slot.is-warn { outline: .6mm dashed var(--warn); outline-offset: .6mm; border-radius: 1mm; }
+#print-root .sheet-flag { position: absolute; z-index: 6; top: 2mm; left: var(--pad-x); right: var(--pad-x); font-size: 9.5pt; padding: 1mm 3mm;
+  background: rgba(217, 83, 79, .94); color: #fff; border-radius: 2mm; }
+
+/* ---------- 預覽工具列（只在螢幕顯示） ---------- */
+#print-root .pv-bar { position: relative; z-index: 20; background: #fff; border-bottom: 1px solid var(--line); padding: 10px 16px;
+  display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; font-size: 14px; box-shadow: 0 2px 8px rgba(30, 60, 90, .08); }
+#print-root .pv-bar h2 { margin: 0; font-family: var(--font-title); font-weight: 400; font-size: 20px; color: var(--sky-deep); }
+#print-root .pv-bar label { display: inline-flex; gap: 6px; align-items: center; }
+#print-root .pv-bar select, #print-root .pv-bar button { font: inherit; border: 1px solid var(--line); border-radius: 999px; padding: 5px 14px; background: #fff; cursor: pointer; min-height: 36px; }
+#print-root .pv-bar .primary { background: var(--sky-deep); border-color: var(--sky-deep); color: #fff; }
+#print-root .pv-sum { flex: 1 1 100%; margin: 0; color: var(--muted); }
+#print-root .pv-sum.bad { color: var(--danger); font-weight: 700; }
+#print-root .pv-sum.ok { color: #2e7d4f; }
+#print-root .pv-list { flex: 1 1 100%; margin: 0; padding-left: 1.3em; font-size: 13px; color: #5a3b00; }
+
+/* 手機寬度：preview.js 在排版量測完成後才設 zoom（量測一律在 100% 下進行） */
+/* （整合時移除：html, body） */
+
+@media print {
+  /* （整合時移除：html, body） */
+  #print-root .pv-bar, #print-root .flag, #print-root .sheet-flag { display: none !important; }
+  #print-root .slot.is-over, #print-root .slot.is-warn { outline: none; }
+  #print-root .sheets { display: block; padding: 0; gap: 0; zoom: 1 !important; }
+  #print-root .sheet { box-shadow: none; margin: 0; }
+}
+

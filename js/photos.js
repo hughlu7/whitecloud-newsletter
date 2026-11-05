@@ -25,8 +25,18 @@ WC.photos = (function () {
     for (let i = 0; i < ids.length; i += BATCH) {
       const batch = ids.slice(i, i + BATCH);
       let result = null;
-      try { result = (await WC.api.getPhotos(batch)).photos || {}; } catch (e) { console.warn('照片讀取失敗', e); }
+      let deferred = [];
+      try {
+        const res = await WC.api.getPhotos(batch);
+        result = res.photos || {};
+        deferred = res.deferred || []; // 後端因回應上限延後的 ID：放回佇列，下一輪再要
+      } catch (e) { console.warn('照片讀取失敗', e); }
+      if (deferred.length) {
+        deferred.forEach(function (id) { if (queue.indexOf(id) < 0) queue.push(id); });
+        if (!timer) timer = setTimeout(flush, 30);
+      }
       batch.forEach(function (id) {
+        if (deferred.indexOf(id) >= 0) return;
         // 只有後端明確回應時才快取（含明確的 null）；網路或登入錯誤不快取，之後重畫會再試
         const url = result ? (result[id] || null) : null;
         if (result) cache[id] = url;
@@ -52,5 +62,8 @@ WC.photos = (function () {
     });
   }
 
-  return { get: get, prime: prime, hydrate: hydrate };
+  /** 已快取的縮圖（沒有就回 null，不發請求）；列印預覽先用縮圖排版時使用 */
+  function cached(id) { return cache[id] || null; }
+
+  return { get: get, prime: prime, hydrate: hydrate, cached: cached };
 })();

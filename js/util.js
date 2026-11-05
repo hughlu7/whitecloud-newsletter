@@ -79,7 +79,40 @@ WC.util = (function () {
     return String(err);
   }
 
+  /**
+   * 字數上限以「字元」計（v2.1）：Array.from 計算，emoji、罕用字各算 1 字，和後端一致。
+   * 不用 maxlength（maxlength 以 UTF-16 計，emoji 會被算成 2）。輸入法選字中不截斷，選字完成後才截斷。
+   * 元素加 data-maxchars="60" 即可；回傳是否有截斷。
+   */
+  function clampChars(el) {
+    const max = Number(el.getAttribute('data-maxchars'));
+    if (!max || el._composing) return false;
+    const a = Array.from(el.value);
+    if (a.length <= max) return false;
+    const pos = el.selectionStart;
+    el.value = a.slice(0, max).join('');
+    try { const p = Math.min(pos, el.value.length); el.setSelectionRange(p, p); } catch (e) { /* 部分元素不支援 */ }
+    return true;
+  }
+  function charLen(s) { return Array.from(String(s || '')).length; }
+
+  /** 在 root 底下所有 [data-maxchars] 欄位套用字元上限（委派事件，動態新增的欄位也有效） */
+  function bindCharLimits(root) {
+    root.addEventListener('compositionstart', function (e) { if (e.target.hasAttribute && e.target.hasAttribute('data-maxchars')) e.target._composing = true; }, true);
+    root.addEventListener('compositionend', function (e) {
+      const t = e.target;
+      if (!t.hasAttribute || !t.hasAttribute('data-maxchars')) return;
+      t._composing = false;
+      if (clampChars(t)) t.dispatchEvent(new Event('input', { bubbles: true }));
+    }, true);
+    root.addEventListener('input', function (e) {
+      const t = e.target;
+      if (t.hasAttribute && t.hasAttribute('data-maxchars') && clampChars(t)) toast('最多 ' + t.getAttribute('data-maxchars') + ' 字，超過的部分已刪掉', 'info');
+    }, true);
+  }
+
   return {
+    clampChars: clampChars, charLen: charLen, bindCharLimits: bindCharLimits,
     esc: esc, $: $, $all: $all, todayStr: todayStr, currentMonth: currentMonth, shiftMonth: shiftMonth,
     monthLabel: monthLabel, dateLabel: dateLabel, fmtBytes: fmtBytes, toast: toast, errMsg: errMsg
   };
