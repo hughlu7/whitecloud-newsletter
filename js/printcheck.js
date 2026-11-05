@@ -17,7 +17,7 @@ WC.printcheck = (function () {
   function terms() {
     if (compiled) return compiled;
     compiled = (window.WC_PRIVACY_TERMS || []).filter(function (t) { return t.type !== 'except'; }).map(function (t) {
-      return t.type === 'regex' ? { re: new RegExp(t.text, 'i'), label: t.note || t.text } : { text: t.text, label: t.text };
+      return t.type === 'regex' ? { re: new RegExp(t.text, 'i'), label: t.note || t.text, soft: !!t.soft } : { text: t.text, label: t.text, soft: !!t.soft };
     });
     return compiled;
   }
@@ -30,8 +30,12 @@ WC.printcheck = (function () {
     const pend = s.match(PENDING_RE);
     if (pend) out.push({ field: field, kind: 'pending', text: '有「' + pend[0] + '」，請補上內容' });
     const masked = maskExceptions(s);   // v2.2 N3：例外詞（哭笑不得、搶答…）先遮掉
-    const hit = terms().filter(function (t) { return t.re ? t.re.test(masked) : masked.indexOf(t.text) >= 0; }).map(function (t) { return t.label; });
+    const found = terms().filter(function (t) { return t.re ? t.re.test(masked) : masked.indexOf(t.text) >= 0; });
+    const hit = found.filter(function (t) { return !t.soft; }).map(function (t) { return t.label; });
+    const soft = found.filter(function (t) { return t.soft; }).map(function (t) { return t.label; });
     if (hit.length) out.push({ field: field, kind: 'privacy', text: '可能不宜給家長看的字眼：' + uniq(hit).join('、') });
+    // v2.3：提醒等級（例如「尖叫」，「開心地尖叫」很常見）
+    if (soft.length) out.push({ field: field, kind: 'privacysoft', text: '請確認語意：' + uniq(soft).join('、') });
   }
 
   function maskExceptions(s) {

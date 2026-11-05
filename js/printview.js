@@ -57,8 +57,10 @@ WC.printview = (function () {
         const slot = box.querySelector('.slot[data-id="' + cssEsc(it.id) + '"]');
         const found = WC.printcheck.checkRecord({ newsletter: rec.newsletter, summary: rec.summary }, it.photos);
         if (found.length) {
-          out.push({ level: 'red', kind: 'content', page: pg.index, unit: pg.unit, id: it.id, title: it.title, messages: found.map(function (x) { return x.field + '：' + x.text; }) });
-          flag(slot, 'red', '⚠ 待處理：' + WC.printcheck.summary(found));
+          // v2.3：只有提醒等級（privacysoft，例如「尖叫」）時用黃框
+          const lv = found.every(function (x) { return x.kind === 'privacysoft'; }) ? 'yellow' : 'red';
+          out.push({ level: lv, kind: 'content', page: pg.index, unit: pg.unit, id: it.id, title: it.title, messages: found.map(function (x) { return x.field + '：' + x.text; }) });
+          flag(slot, lv, (lv === 'red' ? '⚠ 待處理：' : '請確認：') + WC.printcheck.summary(found));
         }
         const withCap = it.photos.filter(function (p) { return p.caption; }).length;
         if (withCap) {
