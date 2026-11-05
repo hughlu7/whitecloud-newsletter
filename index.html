@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta name="robots" content="noindex, nofollow">
+  <!-- CSP：只允許本站與 Google 登入／Apps Script；禁止 inline script（XSS 縱深防禦） -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self' data: blob:; connect-src 'self' https://script.google.com https://script.googleusercontent.com https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <title>白雲家訊</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- 示範模式提示列 -->
+  <div id="demo-bar" class="demo-bar" hidden>
+    <span class="demo-text"><b>示範模式</b>：使用假資料，只存在這個分頁的記憶體裡，重新整理就清空；照片不會上傳。</span>
+    <label>示範身分
+      <select id="demo-role">
+        <option value="editor">王老師（主編）</option>
+        <option value="teacher">林老師（老師）</option>
+      </select>
+    </label>
+  </div>
+
+  <!-- 登入 -->
+  <section id="login" class="login" hidden>
+    <div class="login-card">
+      <div class="logo-cloud" aria-hidden="true">☁</div>
+      <h1>白雲家訊</h1>
+      <p>請用學校或班級成員的 Google 帳號登入。</p>
+      <div id="login-btn"></div>
+      <p id="login-msg" class="login-msg"></p>
+    </div>
+  </section>
+
+  <!-- 無法使用（未加入成員、未初始化…） -->
+  <section id="fatal" class="login" hidden>
+    <div class="login-card">
+      <h1>無法使用</h1>
+      <p id="fatal-msg"></p>
+      <button type="button" id="btn-reload" class="btn">重新整理</button>
+    </div>
+  </section>
+
+  <div id="app" hidden>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo-cloud" aria-hidden="true">☁</span>
+        <div><div id="brand-name" class="brand-name">白雲家訊</div><div id="brand-class" class="brand-class"></div></div>
+      </div>
+      <div class="month-picker" aria-label="製作月份">
+        <span class="mp-label">製作月份</span>
+        <button type="button" id="month-prev" class="icon-btn" aria-label="上個月">‹</button>
+        <strong id="month-label"></strong>
+        <button type="button" id="month-next" class="icon-btn" aria-label="下個月">›</button>
+        <input type="month" id="month-input" aria-label="選擇月份">
+      </div>
+      <div class="top-actions">
+        <span id="who" class="who"></span>
+        <button type="button" id="btn-signout" class="btn btn-signout">登出</button>
+        <button type="button" id="btn-new" class="btn btn-primary">＋ 新增活動紀錄</button>
+      </div>
+    </header>
+
+    <div id="broken-banner" class="broken-banner" role="alert" hidden></div>
+
+    <nav class="tabs" role="tablist">
+      <button type="button" class="tab on" role="tab" data-tab="library">本月素材</button>
+      <button type="button" class="tab" role="tab" data-tab="pages">六頁編排</button>
+      <button type="button" class="tab" role="tab" data-tab="guide">版型手冊</button>
+    </nav>
+
+    <main>
+      <!-- 本月素材 -->
+      <section id="panel-library" class="panel">
+        <div class="stats">
+          <div class="stat"><span id="stat-records">0</span><small>活動紀錄</small></div>
+          <div class="stat"><span id="stat-photos">0</span><small>照片張數</small></div>
+          <div class="stat"><span id="stat-used">0</span><small>已採用素材</small></div>
+        </div>
+        <p id="role-hint" class="role-hint"></p>
+        <div class="filters">
+          <div id="unit-filter" class="chips" aria-label="依家訊單元篩選"></div>
+          <label class="status-filter">狀態
+            <select id="status-filter">
+              <option value="">全部</option>
+              <option>草稿</option><option>已確認</option><option>已採用</option><option>不採用</option>
+            </select>
+          </label>
+        </div>
+        <div id="record-list" class="cards"></div>
+      </section>
+
+      <!-- 六頁編排（第 1 階段：總覽） -->
+      <section id="panel-pages" class="panel" hidden>
+        <div class="stage-note">第 1 階段先顯示各單元的採用狀況與建議版型；A4 六頁排版、下載編排文字稿、列印 PDF 將在第 3 階段開放。</div>
+        <div id="pages-orphans" class="orphan-note" role="status" hidden></div>
+        <div id="pages-body" class="pages-grid"></div>
+      </section>
+
+      <!-- 版型手冊 -->
+      <section id="panel-guide" class="panel" hidden>
+        <div class="guide-grid">
+          <article class="guide-card">
+            <h3>故事版</h3>
+            <div class="guide-demo story"><div class="g-photo big"></div><div class="g-lines"><i></i><i></i><i></i><i></i></div></div>
+            <p>一張主照片＋完整敘述。適合一次深入的活動，寫出孩子的表情、對話與轉變。</p>
+          </article>
+          <article class="guide-card">
+            <h3>相簿版</h3>
+            <div class="guide-demo album"><div class="g-photo"></div><div class="g-photo"></div><div class="g-photo"></div><div class="g-photo"></div></div>
+            <p>多張照片＋短圖說。適合體能活動、節慶等畫面豐富的主題，每張一句話就好。</p>
+          </article>
+          <article class="guide-card">
+            <h3>探索版</h3>
+            <div class="guide-demo explore"><span>嘗試</span><b>→</b><span>發現</span><b>→</b><span>調整</span></div>
+            <p>依「嘗試→發現→調整」的順序呈現。適合學習區、科學探索，讓家長看見思考歷程。</p>
+          </article>
+        </div>
+        <div class="guide-rules">
+          <h3>視覺語言</h3>
+          <ul>
+            <li><span class="sw sky"></span>天空藍、<span class="sw cream"></span>奶油黃、<span class="sw peach"></span>柔和橘</li>
+            <li>圓角照片、清楚的小標題、溫暖具體的文字</li>
+            <li>固定六頁，一個單元一頁；內容過多時精簡或拆到下個月</li>
+          </ul>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- 新增／編輯活動紀錄視窗 -->
+  <div id="editor" class="modal" hidden>
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="editor-title">
+      <form id="editor-form" novalidate>
+        <header class="modal-head">
+          <h2 id="editor-title">新增活動紀錄</h2>
+          <button type="button" id="editor-close" class="icon-btn" aria-label="關閉">✕</button>
+        </header>
+        <div class="modal-body">
+          <p id="editor-broken-note" class="broken-note" role="alert" hidden>這筆紀錄的照片資料損壞，暫時無法編輯或刪除，請聯絡管理者修正試算表。</p>
+          <p id="editor-readonly-note" class="readonly-note" hidden>這筆紀錄不是您可以修改的（他人投稿，或已由主編定案），僅供檢視。</p>
+          <p id="editor-author" class="muted"></p>
+          <div class="row">
+            <label class="grow"><span>標題 <em>*</em> <small class="counter" data-count-for="title"></small></span>
+              <input name="title" required maxlength="60" placeholder="例：秋天的落葉拼貼">
+            </label>
+            <label><span>活動日期 <em>*</em></span>
+              <input name="date" type="date" required>
+            </label>
+            <label><span>家訊單元 <em>*</em></span>
+              <select name="unit" required></select>
+            </label>
+          </div>
+
+          <label><span>原始紀錄 <small class="counter" data-count-for="rawText"></small></span>
+            <textarea name="rawText" rows="6" maxlength="5000" placeholder="把今天看到的、孩子說的話直接記下來，不用修飾。可以按「開始口述」用說的。"></textarea>
+          </label>
+          <div class="speech-row">
+            <button type="button" id="btn-speech" class="btn">🎙 開始口述</button>
+            <span id="speech-live" class="speech-live" aria-live="polite"></span>
+          </div>
+          <p id="speech-note" class="muted small"></p>
+
+          <div class="ai-row">
+            <button type="button" id="btn-ai" class="btn" disabled>✨ AI 整理摘要與文案</button>
+            <span class="stage-tag">第 2 階段開放</span>
+          </div>
+
+          <p class="field-hint">「活動摘要」與「家訊文案」目前請自行填寫（可先留白）；第 2 階段起，AI 會依原始紀錄幫忙產生草稿。</p>
+          <label><span>活動摘要 <small class="counter" data-count-for="summary"></small></span>
+            <textarea name="summary" rows="2" maxlength="500" placeholder="一兩句話說明這個活動"></textarea>
+          </label>
+          <label><span>家訊文案 <small class="counter" data-count-for="newsletter"></small></span>
+            <textarea name="newsletter" rows="5" maxlength="2000" placeholder="要給家長看的文字"></textarea>
+          </label>
+
+          <fieldset class="photo-field">
+            <legend>活動照片 <span id="photo-count" class="muted"></span></legend>
+            <label id="photo-pick" class="btn photo-pick">＋ 加入活動照片
+              <input id="photo-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+            </label>
+            <span class="muted small">JPG／PNG／WebP，每張 10MB 內，最多 20 張；會先在您的電腦壓縮到約 300KB 再上傳。</span>
+            <div id="photo-status" class="muted small" aria-live="polite"></div>
+            <div id="photo-grid" class="photo-grid"></div>
+            <button type="button" id="photo-undo" class="btn-link" hidden>↶ 復原剛才移除的照片</button>
+          </fieldset>
+
+          <div class="row">
+            <label>偏好版型 <select name="layout"></select></label>
+            <label>處理狀態 <select name="status"></select></label>
+          </div>
+          <p class="field-hint">文字與照片都整理好、可以給主編挑選時，把狀態改成「已確認」；「已採用／不採用」由主編決定。</p>
+        </div>
+        <footer class="modal-foot">
+          <span id="editor-footer-info" class="foot-info"></span>
+          <button type="button" id="btn-delete" class="btn btn-danger">刪除</button>
+          <button type="button" id="btn-cancel" class="btn">取消</button>
+          <button type="submit" id="btn-save" class="btn btn-primary">儲存</button>
+        </footer>
+      </form>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" aria-live="polite"></div>
+
+  <script src="js/config.js"></script>
+  <script src="js/util.js"></script>
+  <script src="js/state.js"></script>
+  <script src="js/demo.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/photos.js"></script>
+  <script src="js/image.js"></script>
+  <script src="js/speech.js"></script>
+  <script src="js/records.js"></script>
+  <script src="js/layout.js"></script>
+  <script src="js/editor.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

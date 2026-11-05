@@ -1,0 +1,309 @@
+/**
+ * 示範模式：在瀏覽器記憶體裡模擬 GAS 後端（含權限規則），方便不接後端先看畫面與回測。
+ * 資料重新整理頁面就清空；照片存在記憶體（data URL），不會上傳到任何地方。
+ *
+ * 權限規則與 gas/Code.gs 一致：
+ *   - 主編可改、可刪全部紀錄，可設任何狀態
+ *   - 老師只能改、刪自己投稿且狀態為「草稿／已確認」的紀錄，只能設「草稿／已確認」
+ * 頁首有「示範身分」切換，可測兩種角色。
+ */
+WC.demo = (function () {
+  const USERS = {
+    editor: { email: 'editor@demo.tw', name: '王老師', role: '主編' },
+    teacher: { email: 'teacher@demo.tw', name: '林老師', role: '老師' }
+  };
+  const CONFIG = {
+    className: '白雲班',
+    newsletterName: '白雲家訊',
+    footer: '白雲班的每一天，都值得記錄。',
+    units: ['主題課程', '生活與探索', '學習區 A', '學習區 B', '體能活動', '白雲大小事'],
+    layouts: ['故事版', '相簿版', '探索版'],
+    maxPhotos: 20
+  };
+  const TEACHER_STATUSES = ['草稿', '已確認'];
+  const STATUSES = ['草稿', '已確認', '已採用', '不採用'];
+
+  let currentUser = USERS.editor;
+  const records = [];
+  const photoStore = {}; // fileId → data URL
+  // 模擬 Drive 檔案的反向標記（說明欄）：fileId → { recordId, kind:'full'|'thumb', base, created, w, h }
+  const photoMeta = {};
+  let seq = 0;
+
+  function newId(prefix) { seq += 1; return prefix + '-' + Date.now().toString(36) + '-' + seq; }
+  function delay(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function fail(code, message) { const e = new Error(message); e.code = code; throw e; }
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+
+  /** 用 SVG 畫一張色塊假照片（不需要網路） */
+  function fakePhoto(label, color) {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300">' +
+      '<rect width="400" height="300" fill="' + color + '"/>' +
+      '<circle cx="320" cy="70" r="36" fill="#fff8e1" opacity=".9"/>' +
+      '<path d="M0 240 Q100 180 200 230 T400 220 V300 H0Z" fill="#ffffff" opacity=".55"/>' +
+      '<text x="200" y="165" font-size="30" text-anchor="middle" fill="#37474f" font-family="sans-serif">' + label + '</text></svg>';
+    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  }
+
+  function addFakePhotos(labels) {
+    const colors = ['#bbdefb', '#ffe0b2', '#fff59d', '#c8e6c9', '#f8bbd0', '#d1c4e9'];
+    return labels.map(function (label, i) {
+      const id = newId('demo-photo'), thumbId = newId('demo-thumb');
+      const url = fakePhoto(label, colors[i % colors.length]);
+      photoStore[id] = url;
+      photoStore[thumbId] = url;
+      registerPhoto(id, thumbId, 400, 300);
+      return { id: id, thumbId: thumbId, w: 400, h: 300 };
+    });
+  }
+
+  function seed() {
+    const m = WC.util.currentMonth();
+    const now = new Date().toISOString();
+    const base = [
+      ['主題課程', m + '-03', '秋天的落葉拼貼', '今天帶孩子到校園撿落葉，回教室分類顏色和形狀，做成拼貼畫。', '已採用', '故事版', ['落葉 1'], 'editor'],
+      ['生活與探索', m + '-04', '自己的餐具自己洗', '午餐後練習洗碗，大家輪流排隊。', '已確認', '相簿版', ['洗碗 1', '洗碗 2', '洗碗 3'], 'teacher'],
+      ['學習區 A', m + '-05', '積木高塔挑戰', '嘗試蓋到一公尺高，倒了三次後發現底座要寬。', '草稿', '探索版', ['積木 1', '積木 2'], 'teacher'],
+      ['體能活動', m + '-06', '跳繩小達人', '今天練習雙腳跳。', '已採用', '相簿版', ['跳繩 1', '跳繩 2', '跳繩 3', '跳繩 4'], 'editor'],
+      ['白雲大小事', m + '-07', '小天的生日會', '一起唱生日歌、分享蛋糕。', '不採用', '故事版', [], 'editor']
+    ];
+    base.forEach(function (b) {
+      const u = USERS[b[7]];
+      records.push({
+        id: newId('demo-rec'), month: m, date: b[1], unit: b[0], title: b[2], rawText: b[3],
+        summary: '', newsletter: b[4] === '已採用' ? b[3] + '孩子們都很投入，回家可以問問他們今天的發現喔！' : '',
+        layout: b[5], status: b[4], photos: addFakePhotos(b[6]),
+        authorEmail: u.email, authorName: u.name, createdAt: now, updatedAt: now
+      });
+      tagPhotos(records[records.length - 1]);
+    });
+  }
+
+  /** 回測用：把某筆紀錄標成「照片資料損壞」（模擬有人手改試算表的照片JSON 欄） */
+  let createdSeq = 0;
+  /** 模擬上傳：原圖與縮圖共用檔名 base，標記尚未屬於任何紀錄 */
+  function registerPhoto(id, thumbId, w, h) {
+    const base = 'demo_' + (++createdSeq);
+    photoMeta[id] = { recordId: '', kind: 'full', base: base, created: createdSeq, w: w, h: h };
+    photoMeta[thumbId] = { recordId: '', kind: 'thumb', base: base, created: createdSeq, w: w, h: h };
+  }
+
+  /** 與 GAS tagPhotosForRecord_ 相同：存檔後替照片寫上紀錄 ID */
+  function tagPhotos(rec) {
+    rec.photos.forEach(function (ph) {
+      [ph.id, ph.thumbId].forEach(function (fid) { if (photoMeta[fid]) photoMeta[fid].recordId = rec.id; });
+    });
+  }
+
+  /** 與 GAS 相同：照片從紀錄移除或紀錄刪除時，清除標記並從「Drive」移除 */
+  function untagAndTrash(fileIds, recordId) {
+    fileIds.forEach(function (fid) {
+      const m = photoMeta[fid];
+      if (!m) return;
+      const owner = m.recordId && records.some(function (r) { return r.id === m.recordId; });
+      if (m.recordId && m.recordId !== recordId && owner) return; // 屬於別筆仍存在的紀錄，不丟
+      delete photoMeta[fid];
+      delete photoStore[fid];
+    });
+  }
+
+  /** 回測用：把某筆紀錄標成「照片資料損壞」（模擬有人清空或改壞試算表的照片JSON 欄）；照片檔與標記仍在 */
+  function markBroken(title) {
+    const r = records.find(function (x) { return x.title.indexOf(title) >= 0; });
+    if (r) { r.photosBroken = true; r.photos = []; } // 與 GAS 相同：損壞時照片清單讀不出來
+    return !!r;
+  }
+
+  /**
+   * 回測用：模擬 repairBrokenPhotosApply()。依反向標記重建損壞紀錄的照片清單
+   * （原圖配對縮圖、依建立順序、最多 maxPhotos 張）。回傳 [{ title, photos }]；重建後請切換一次示範身分重新載入。
+   */
+  function repair() {
+    const out = [];
+    records.forEach(function (r) {
+      if (!r.photosBroken) return;
+      const fulls = {}, thumbs = {};
+      Object.keys(photoMeta).forEach(function (fid) {
+        const m = photoMeta[fid];
+        if (m.recordId !== r.id) return;
+        (m.kind === 'full' ? fulls : thumbs)[m.base] = { id: fid, m: m };
+      });
+      const bases = Object.keys(fulls).filter(function (b) { return thumbs[b]; })
+        .sort(function (a, b) { return fulls[a].m.created - fulls[b].m.created; })
+        .slice(0, CONFIG.maxPhotos);
+      r.photos = bases.map(function (b) { return { id: fulls[b].id, thumbId: thumbs[b].id, w: fulls[b].m.w, h: fulls[b].m.h }; });
+      r.photosBroken = false;
+      r.updatedAt = new Date(Date.parse(r.updatedAt) + 1).toISOString();
+      out.push({ title: r.title, photos: r.photos.length });
+    });
+    return out;
+  }
+
+  function canEdit(rec) {
+    if (currentUser.role === '主編') return true;
+    return rec.authorEmail === currentUser.email && TEACHER_STATUSES.indexOf(rec.status) >= 0;
+  }
+  function decorate(rec) { const r = clone(rec); r.canEdit = canEdit(rec); r.photosBroken = !!rec.photosBroken; return r; }
+
+  /** 與 GAS isRealDate_ 相同 */
+  function isRealDate(s) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || ''));
+    if (!m) return false;
+    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    if (y < 2000 || y > 2100 || mo < 1 || mo > 12 || d < 1) return false;
+    return d <= new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  }
+
+  /** 與 GAS 相同：同一筆紀錄內重複的照片只保留第一次 */
+  function dedupePhotos(list) {
+    const seen = {};
+    return list.filter(function (p) {
+      if (seen[p.id] || seen[p.thumbId]) return false;
+      seen[p.id] = true; seen[p.thumbId] = true;
+      return true;
+    }).map(function (p) { return { id: p.id, thumbId: p.thumbId, w: p.w, h: p.h }; });
+  }
+
+  function validate(r) {
+    const title = String(r.title || '').trim();
+    if (!title) fail('BAD_REQUEST', '請填寫標題');
+    if (title.length > 60) fail('BAD_REQUEST', '標題最多 60 字');
+    if (!isRealDate(r.date)) fail('BAD_REQUEST', '活動日期不正確（格式應為 YYYY-MM-DD，且必須是存在的日期）');
+    const old = r.id ? records.find(function (x) { return x.id === r.id; }) : null;
+    if (CONFIG.units.indexOf(r.unit) < 0 && !(old && old.unit === r.unit)) fail('BAD_REQUEST', '家訊單元不在設定表的單元清單內');
+    if (r.layout && CONFIG.layouts.indexOf(r.layout) < 0 && !(old && old.layout === r.layout)) fail('BAD_REQUEST', '偏好版型不在設定表的版型清單內');
+    if (STATUSES.indexOf(r.status) < 0) fail('BAD_REQUEST', '處理狀態不正確');
+    if (String(r.rawText || '').length > 5000) fail('BAD_REQUEST', '原始紀錄最多 5000 字');
+    if (String(r.summary || '').length > 500) fail('BAD_REQUEST', '活動摘要最多 500 字');
+    if (String(r.newsletter || '').length > 2000) fail('BAD_REQUEST', '家訊文案最多 2000 字');
+    if ((r.photos || []).length > CONFIG.maxPhotos) fail('BAD_REQUEST', '每筆紀錄最多 ' + CONFIG.maxPhotos + ' 張照片');
+    if (currentUser.role !== '主編' && TEACHER_STATUSES.indexOf(r.status) < 0) {
+      fail('FORBIDDEN', '「' + r.status + '」狀態只有主編可以設定。');
+    }
+    return {
+      id: r.id || '', month: r.date.slice(0, 7), date: r.date, unit: r.unit, title: title,
+      rawText: String(r.rawText || '').trim(), summary: String(r.summary || '').trim(),
+      newsletter: String(r.newsletter || '').trim(), layout: r.layout || '', status: r.status,
+      photos: dedupePhotos(r.photos || [])
+    };
+  }
+
+  /** 與 GAS 相同：照片必須存在，且不能屬於別筆紀錄 */
+  function checkPhotoOwnership(clean, old) {
+    clean.photos.forEach(function (ph) {
+      [ph.id, ph.thumbId].forEach(function (fid) {
+        if (!photoStore[fid]) fail('PHOTO_EXPIRED', '照片已過期或不在白雲家訊照片資料夾內，請移除後重新加入。');
+        // 與 GAS 相同：照片標記指向另一筆仍存在的紀錄（即使那筆照片JSON 損壞）就不能挪用
+        const m = photoMeta[fid];
+        const mine = old && old.photos.some(function (x) { return x.id === fid || x.thumbId === fid; });
+        if (!mine && m && m.recordId && m.recordId !== (old ? old.id : '') &&
+          records.some(function (r) { return r.id === m.recordId; })) {
+          fail('PHOTO_TAKEN', '照片已屬於其他紀錄，請移除後重新加入。');
+        }
+        records.forEach(function (r) {
+          if (old && r.id === old.id) return;
+          r.photos.forEach(function (x) { if (x.id === fid || x.thumbId === fid) fail('PHOTO_TAKEN', '照片已屬於其他紀錄，請移除後重新加入。'); });
+        });
+      });
+    });
+  }
+
+  const handlers = {
+    bootstrap: function () {
+      // 與 GAS 相同：只有主編會收到照片資料損壞的列
+      const brokenRows = currentUser.role === '主編'
+        ? records.map(function (r, i) { return { r: r, row: i + 2 }; })
+          .filter(function (x) { return x.r.photosBroken; })
+          .map(function (x) { return { row: x.row, title: x.r.title }; })
+        : [];
+      return { me: clone(currentUser), config: clone(CONFIG), version: 'demo', brokenRows: brokenRows };
+    },
+
+    listRecords: function (p) {
+      const list = records.filter(function (r) { return r.month === p.month; })
+        .sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; })
+        .map(decorate);
+      return { month: p.month, records: list };
+    },
+
+    saveRecord: function (p) {
+      const clean = validate(p.record || {});
+      const now = new Date().toISOString();
+      if (!clean.id) {
+        checkPhotoOwnership(clean, null);
+        const rec = Object.assign(clean, {
+          id: newId('demo-rec'), authorEmail: currentUser.email, authorName: currentUser.name, createdAt: now, updatedAt: now
+        });
+        records.push(rec);
+        tagPhotos(rec);
+        return { record: decorate(rec) };
+      }
+      if (!p.expectedUpdatedAt) fail('BAD_REQUEST', '更新紀錄時必須附上 expectedUpdatedAt（請重新整理後再編輯）。');
+      const idx = records.findIndex(function (r) { return r.id === clean.id; });
+      if (idx < 0) fail('NOT_FOUND', '找不到這筆紀錄，可能已被刪除。');
+      const old = records[idx];
+      if (!canEdit(old)) fail('FORBIDDEN', '您沒有修改這筆紀錄的權限。');
+      if (old.photosBroken) fail('PHOTOS_BROKEN', '這筆紀錄的照片資料損壞，請聯絡管理者修正試算表後再編輯。');
+      if (p.expectedUpdatedAt !== old.updatedAt) fail('CONFLICT', '這筆紀錄已被其他人修改過，請重新整理後再編輯。');
+      checkPhotoOwnership(clean, old);
+      const stamp = now === old.updatedAt ? new Date(Date.parse(now) + 1).toISOString() : now;
+      const rec = Object.assign({}, old, clean, { updatedAt: stamp });
+      records[idx] = rec;
+      tagPhotos(rec);
+      const keep = {};
+      rec.photos.forEach(function (ph) { keep[ph.id] = true; keep[ph.thumbId] = true; });
+      const removed = [];
+      old.photos.forEach(function (ph) { [ph.id, ph.thumbId].forEach(function (f) { if (!keep[f]) removed.push(f); }); });
+      untagAndTrash(removed, rec.id);
+      return { record: decorate(rec) };
+    },
+
+    deleteRecord: function (p) {
+      const idx = records.findIndex(function (r) { return r.id === p.id; });
+      if (idx < 0) fail('NOT_FOUND', '找不到這筆紀錄，可能已被刪除。');
+      if (!canEdit(records[idx])) fail('FORBIDDEN', '您沒有刪除這筆紀錄的權限。');
+      if (records[idx].photosBroken) fail('PHOTOS_BROKEN', '這筆紀錄的照片資料損壞，請聯絡管理者修正試算表後再刪除。');
+      const gone = records.splice(idx, 1)[0];
+      const ids = [];
+      gone.photos.forEach(function (ph) { ids.push(ph.id, ph.thumbId); });
+      untagAndTrash(ids, gone.id);
+      return { id: p.id };
+    },
+
+    uploadPhoto: function (p) {
+      if (!p.full || !p.thumb) fail('BAD_REQUEST', '缺少照片資料');
+      if (p.full.length > 1100000) fail('TOO_LARGE', '照片太大，請重新選擇照片');
+      const id = newId('demo-photo'), thumbId = newId('demo-thumb');
+      photoStore[id] = 'data:image/jpeg;base64,' + p.full;
+      photoStore[thumbId] = 'data:image/jpeg;base64,' + p.thumb;
+      registerPhoto(id, thumbId, p.w, p.h);
+      return { photo: { id: id, thumbId: thumbId, w: p.w, h: p.h } };
+    },
+
+    getPhotos: function (p) {
+      const out = {};
+      (p.ids || []).forEach(function (id) { out[id] = photoStore[id] || null; });
+      return { photos: out };
+    }
+  };
+
+  /** 給 api.js 呼叫；模擬網路延遲，讓「儲存中…」等狀態看得到 */
+  async function handle(action, params) {
+    await delay(action === 'uploadPhoto' ? 250 : 150);
+    const h = handlers[action];
+    if (!h) fail('BAD_ACTION', '不支援的動作：' + action);
+    return h(clone(params));
+  }
+
+  function setUser(key) { if (USERS[key]) currentUser = USERS[key]; }
+  function getUserKey() { return currentUser === USERS.editor ? 'editor' : 'teacher'; }
+
+  seed();
+  /** 回測用：模擬設定表改名（例如把某單元移除），測試「（舊值）」選項 */
+  function setConfig(patch) { Object.assign(CONFIG, patch || {}); }
+
+  /** 回測用：查看某張照片的模擬標記 */
+  function photoTag(fileId) { return photoMeta[fileId] ? clone(photoMeta[fileId]) : null; }
+
+  return { handle: handle, setUser: setUser, getUserKey: getUserKey, setConfig: setConfig, markBroken: markBroken, repair: repair, photoTag: photoTag };
+})();
