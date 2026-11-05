@@ -278,7 +278,17 @@ WC.demo = (function () {
       }
       s = s.split(v).join(cs.length > 1 ? '[S?]' : '[' + cs[0] + ']');
     });
-    return { text: s, warnings: warnings, candidates: candidates };
+    // 簡化版（v2.3.1 M1）：兩字名字中間夾一個標點 → 換成 [S?] 並另列提醒（真正的演算法在 Deidentify.gs）
+    const splits = [];
+    DEMO_ROSTER.forEach(function (r) {
+      const g = r.name.length >= 3 ? r.name.slice(1) : r.name;
+      if (g.length !== 2) return;
+      s = s.replace(new RegExp(g.charAt(0) + '[，。、！？／/｜|・.\\-~～「」【】《》（）()]+' + g.charAt(1), 'g'), function (m) {
+        splits.push('「' + m + '」這段可能是名字，已用 [S?] 代替；AI 寫完後請自行補上');
+        return '[S?]';
+      });
+    });
+    return { text: s, warnings: warnings, candidates: candidates, splits: splits };
   }
 
   function demoRestore(s) {
@@ -297,7 +307,7 @@ WC.demo = (function () {
     const d = demoDeid(raw);
     // 與 GAS 相同（v2.2 N4）：用原文去掉標記與空白後的長度
     if (raw.replace(/\[\[|\]\]/g, '').replace(/\[\s*S\s*(\d+|\?)\s*\]/gi, '').replace(/\s/g, '').length < 4) fail('TOO_SHORT', '原始紀錄太短，AI 沒有東西可以整理；請多寫幾句再試。');
-    if (d.warnings.length && !p.confirm) { const e = new Error('送出前請確認以下幾點：'); e.code = 'NEED_CONFIRM'; e.warnings = d.warnings; e.candidates = d.candidates; throw e; }
+    if ((d.warnings.length || d.splits.length) && !p.confirm) { const e = new Error('送出前請確認以下幾點：'); e.code = 'NEED_CONFIRM'; e.warnings = d.warnings; e.splitWarnings = d.splits; e.candidates = d.candidates; throw e; }
     if (demoAiNext && demoAiNext.error) { const code = demoAiNext.error; demoAiNext = null; fail(code, code === 'AI_LIMIT' ? '今天的 AI 整理次數已用完' : 'AI 服務忙碌中，請稍後再試。'); }
     demoAiCalls += 1;
     const n = Math.max(0, Math.min(20, Number(rec.photoCount) || 0));

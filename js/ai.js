@@ -94,7 +94,7 @@ WC.ai = (function () {
     } catch (e) {
       if (my !== seq) return;
       if (e.code === 'NEED_CONFIRM') {
-        showConfirm(e.warnings || [], e.candidates || []);
+        showConfirm(e.warnings || [], e.candidates || [], e.splitWarnings || []);
         setStatus('');
       } else {
         setStatus('AI 整理失敗：' + ((MESSAGES[e.code]) || U.errMsg(e)) + '（欄位沒有被改動）');
@@ -109,10 +109,16 @@ WC.ai = (function () {
    * 點選後在原始紀錄把那個稱呼換成 [[姓名]] 標記（只換第一個還沒標記的），全部選完自動再送一次。
    * 候選姓名只有「與這個稱呼相符」的學生（伺服器只回這些），不會拿到整份名單。
    */
-  function showConfirm(warnings, candidates) {
+  function showConfirm(warnings, candidates, splits) {
     const ul = U.$('#ai-confirm-list');
     ul.innerHTML = '';
     warnings.forEach(function (w) { const li = document.createElement('li'); li.textContent = w; ul.appendChild(li); });
+    ul.hidden = !warnings.length;
+    // v2.3.1 M1：可能是被符號隔開的名字，分開顯示
+    const sl = U.$('#ai-split-list');
+    sl.innerHTML = '';
+    (splits || []).forEach(function (w) { const li = document.createElement('li'); li.textContent = w; sl.appendChild(li); });
+    U.$('#ai-split').hidden = !(splits && splits.length);
     const pick = U.$('#ai-candidates');
     pick.innerHTML = '';
     candidates.forEach(function (c) {
