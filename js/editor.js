@@ -299,6 +299,8 @@ WC.editor = (function () {
     if (code === 'PHOTO_EXPIRED') return '有照片已過期，請把顯示灰色的照片移除後重新加入。';
     if (code === 'PHOTO_TAKEN') return '有照片已屬於其他紀錄，請移除後重新加入。';
     if (code === 'PHOTOS_BROKEN') return '照片資料損壞，請聯絡管理者。';
+    if (code === 'PHOTO_NOT_YOURS') return '有照片是其他老師上傳、尚未存檔的，不能加入您的紀錄；請把它移除後，改用自己上傳的照片。';
+    if (code === 'PHOTO_MISMATCH') return '有照片的原圖與縮圖不相符，請把它移除後重新加入。';
     if (code === 'CONFLICT') return '這筆紀錄已被其他人修改過，請關閉視窗、重新整理後再編輯。';
     return U.errMsg(err);
   }

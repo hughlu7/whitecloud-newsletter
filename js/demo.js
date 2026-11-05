@@ -84,8 +84,9 @@ WC.demo = (function () {
   /** 模擬上傳：原圖與縮圖共用檔名 base，標記尚未屬於任何紀錄 */
   function registerPhoto(id, thumbId, w, h) {
     const base = 'demo_' + (++createdSeq);
-    photoMeta[id] = { recordId: '', kind: 'full', base: base, created: createdSeq, w: w, h: h };
-    photoMeta[thumbId] = { recordId: '', kind: 'thumb', base: base, created: createdSeq, w: w, h: h };
+    const uploader = currentUser.email;
+    photoMeta[id] = { recordId: '', kind: 'full', base: base, created: createdSeq, w: w, h: h, uploader: uploader };
+    photoMeta[thumbId] = { recordId: '', kind: 'thumb', base: base, created: createdSeq, w: w, h: h, uploader: uploader };
   }
 
   /** 與 GAS tagPhotosForRecord_ 相同：存檔後替照片寫上紀錄 ID */
@@ -196,9 +197,13 @@ WC.demo = (function () {
         // 與 GAS 相同：照片標記指向另一筆仍存在的紀錄（即使那筆照片JSON 損壞）就不能挪用
         const m = photoMeta[fid];
         const mine = old && old.photos.some(function (x) { return x.id === fid || x.thumbId === fid; });
-        if (!mine && m && m.recordId && m.recordId !== (old ? old.id : '') &&
-          records.some(function (r) { return r.id === m.recordId; })) {
+        const ownerExists = m && m.recordId && records.some(function (r) { return r.id === m.recordId; });
+        if (!mine && m && m.recordId && m.recordId !== (old ? old.id : '') && ownerExists) {
           fail('PHOTO_TAKEN', '照片已屬於其他紀錄，請移除後重新加入。');
+        }
+        // 與 GAS 相同：無主照片（未標記或所屬紀錄已刪除）只有上傳者本人或主編能用
+        if (!mine && m && (!m.recordId || !ownerExists) && currentUser.role !== '主編' && m.uploader !== currentUser.email) {
+          fail('PHOTO_NOT_YOURS', '有照片是其他老師剛上傳、尚未存檔的，不能加入您的紀錄。');
         }
         records.forEach(function (r) {
           if (old && r.id === old.id) return;
@@ -302,8 +307,13 @@ WC.demo = (function () {
   /** 回測用：模擬設定表改名（例如把某單元移除），測試「（舊值）」選項 */
   function setConfig(patch) { Object.assign(CONFIG, patch || {}); }
 
+  /** 回測用：模擬「目前身分」上傳一組照片（不存檔），回傳 { id, thumbId, w, h } */
+  function fakeUpload(label) {
+    return addFakePhotos([label || '測試'])[0];
+  }
+
   /** 回測用：查看某張照片的模擬標記 */
   function photoTag(fileId) { return photoMeta[fileId] ? clone(photoMeta[fileId]) : null; }
 
-  return { handle: handle, setUser: setUser, getUserKey: getUserKey, setConfig: setConfig, markBroken: markBroken, repair: repair, photoTag: photoTag };
+  return { handle: handle, setUser: setUser, getUserKey: getUserKey, setConfig: setConfig, markBroken: markBroken, repair: repair, photoTag: photoTag, fakeUpload: fakeUpload };
 })();
