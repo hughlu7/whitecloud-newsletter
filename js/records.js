@@ -139,7 +139,8 @@ WC.records = (function () {
     WC.app.render();
     const data = {
       id: rec.id, title: rec.title, date: rec.date, unit: rec.unit, rawText: rec.rawText, summary: rec.summary,
-      newsletter: rec.newsletter, layout: rec.layout, status: rec.status, photos: rec.photos
+      newsletter: rec.newsletter, layout: rec.layout, status: rec.status, photos: rec.photos,
+      unitConfirmed: rec.unitConfirmed !== false   // v2.2 L2：快速更新也帶上，避免草稿的「單元未確認」被改掉
     };
     Object.assign(data, patch);
     let ok = false;

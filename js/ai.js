@@ -28,11 +28,19 @@ WC.ai = (function () {
     const ready = WC.state.ai.rosterReady !== false;   // v2.1 H1：名單沒有啟用學生時停用
     const can = ready && !running && WC.editor.aiCanUse();
     btn.disabled = !can;
-    btn.title = !ready ? '請先在試算表填寫學生名單' : can ? '' : '先在上面寫下或口述原始紀錄';
+    btn.title = !ready ? '學生名單需要先修正' : can ? '' : '先在上面寫下或口述原始紀錄';
     btn.textContent = running ? '✨ 整理中…' : '✨ AI 幫我整理';
     const note = U.$('#ai-roster-note');
     note.hidden = ready;
-    note.textContent = ready ? '' : (WC.state.ai.duplicateCodes ? '學生名單有重複的代號，請管理者修正後才能使用 AI 整理。' : '請先在試算表的「學生名單」分頁填寫學生名單，才能使用 AI 整理（送出前要把孩子的名字換成代號）。');
+    note.textContent = ready ? '' : rosterNote(WC.state.ai);
+  }
+
+  /** 名單問題說明（v2.2 N1：只顯示列號，不顯示姓名） */
+  function rosterNote(ai) {
+    const inv = ai.invalidRows || [], dup = ai.duplicateRows || [];
+    if (inv.length) return '學生名單第 ' + inv.join('、') + ' 列代號有誤（應寫成 S1、S2…），請管理者修正後才能使用 AI 整理。';
+    if (ai.duplicateCodes) return '學生名單' + (dup.length ? '第 ' + dup.join('、') + ' 列' : '') + '有重複的代號，請管理者修正後才能使用 AI 整理。';
+    return '請先在試算表的「學生名單」分頁填寫學生名單，才能使用 AI 整理（送出前要把孩子的名字換成代號）。';
   }
 
   function reset() {
@@ -60,7 +68,7 @@ WC.ai = (function () {
   const MESSAGES = {
     TOO_SHORT: '原始紀錄太短，AI 沒有東西可以整理；請多寫幾句再試。',
     ROSTER_EMPTY: '請先在試算表的「學生名單」分頁填寫學生名單，才能使用 AI 整理。',
-    ROSTER_DUPLICATE: '學生名單有重複的代號，請管理者修正後再使用。',
+    ROSTER_DUPLICATE: null, ROSTER_INVALID: null, NAME_LEAK: null,   // 用後端訊息（含列號或改寫建議）
     AI_LIMIT: null, AI_BUSY: null, AI_ERROR: null, AI_DISABLED: null
   };
 

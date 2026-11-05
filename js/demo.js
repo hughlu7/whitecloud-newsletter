@@ -213,7 +213,9 @@ WC.demo = (function () {
       rawText: String(r.rawText || '').trim(), summary: String(r.summary || '').trim(),
       newsletter: String(r.newsletter || '').trim(), layout: r.layout || '', status: r.status,
       photos: dedupePhotos(r.photos || []),
-      unitConfirmed: r.status === '草稿' ? r.unitConfirmed !== false : true   // 與 GAS 相同（v2.1）
+      unitConfirmed: r.status !== '草稿' ? true   // 與 GAS 相同（v2.2 L2：沒帶欄位保留舊值）
+        : r.unitConfirmed === undefined ? !(r.id && records.some(function (x) { return x.id === r.id && x.unitConfirmed === false; }))
+        : r.unitConfirmed !== false
     };
   }
 
@@ -245,6 +247,7 @@ WC.demo = (function () {
   // 真正的去名化演算法在 gas/Deidentify.gs（node 測試涵蓋 24 個案例）；這裡只做示範用的簡化版。
   let demoAiCalls = 0;
   let demoRosterOff = false;   // 回測用：模擬名單空白
+  let demoInvalidRows = [];    // 回測用：模擬名單代號有誤的列號（v2.2 N1）
   function demoRosterActive() { return !demoRosterOff && DEMO_ROSTER.some(function (r) { return r.active; }); }
   let demoAiNext = null; // 回測用：指定下一次的假回應（例如 { error: 'AI_BUSY' }）
   const DEMO_LAYOUT_BY_UNIT = { '體能活動': '相簿版', '白雲大小事': '相簿版', '學習區 A': '探索版', '學習區 B': '探索版', '生活與探索': '探索版', '主題課程': '故事版' };
@@ -286,12 +289,14 @@ WC.demo = (function () {
   }
 
   function demoAiDraft(p) {
+    if (demoInvalidRows.length) fail('ROSTER_INVALID', '學生名單第 ' + demoInvalidRows.join('、') + ' 列的代號有誤（應寫成 S1、S2…），請管理者修正後再使用 AI 整理。');
     if (!demoRosterActive()) fail('ROSTER_EMPTY', '請先在試算表的「學生名單」分頁填寫學生名單，才能使用 AI 整理（保護孩子的名字）。');
     const rec = p.record || {};
     const raw = String(rec.rawText || '');
     if (!raw.trim()) fail('BAD_REQUEST', '請先在「說一說」寫下或口述原始紀錄。');
     const d = demoDeid(raw);
-    if (d.text.replace(/\[S(\d+|\?)\]/g, '').replace(/\s/g, '').length < 4) fail('TOO_SHORT', '原始紀錄太短，AI 沒有東西可以整理；請多寫幾句再試。');
+    // 與 GAS 相同（v2.2 N4）：用原文去掉標記與空白後的長度
+    if (raw.replace(/\[\[|\]\]/g, '').replace(/\[\s*S\s*(\d+|\?)\s*\]/gi, '').replace(/\s/g, '').length < 4) fail('TOO_SHORT', '原始紀錄太短，AI 沒有東西可以整理；請多寫幾句再試。');
     if (d.warnings.length && !p.confirm) { const e = new Error('送出前請確認以下幾點：'); e.code = 'NEED_CONFIRM'; e.warnings = d.warnings; e.candidates = d.candidates; throw e; }
     if (demoAiNext && demoAiNext.error) { const code = demoAiNext.error; demoAiNext = null; fail(code, code === 'AI_LIMIT' ? '今天的 AI 整理次數已用完' : 'AI 服務忙碌中，請稍後再試。'); }
     demoAiCalls += 1;
@@ -325,7 +330,7 @@ WC.demo = (function () {
       // 與 GAS 相同：名單只回筆數與是否有重複綽號，不回任何姓名
       return { me: clone(currentUser), config: clone(CONFIG), version: 'demo', brokenRows: brokenRows,
         roster: { count: DEMO_ROSTER.filter(function (s) { return s.active; }).length, total: DEMO_ROSTER.length, hasDuplicateNicknames: true },
-        ai: { enabled: true, demo: true, rosterReady: demoRosterActive() } };
+        ai: { enabled: true, demo: true, rosterReady: demoRosterActive() && !demoInvalidRows.length, invalidRows: demoInvalidRows.slice(), duplicateRows: [] } };
     },
 
     listRecords: function (p) {
@@ -431,6 +436,8 @@ WC.demo = (function () {
   function aiFailNext(code) { demoAiNext = { error: code }; }
   /** 回測用：模擬名單空白（true）或恢復（false）；之後切換一次示範身分重新載入 */
   function rosterEmpty(on) { demoRosterOff = !!on; }
+  /** 回測用：模擬名單有代號錯誤的列（例如 [3, 5]）；之後切換一次示範身分重新載入 */
+  function rosterInvalid(rows) { demoInvalidRows = Array.isArray(rows) ? rows.slice() : []; }
 
   /** 回測用：調整模擬的 getPhotos 回應上限（測試 deferred 分批） */
   function setResponseLimit(n) { demoResponseLimit = Number(n) > 0 ? Number(n) : 6 * 1024 * 1024; }
@@ -438,5 +445,5 @@ WC.demo = (function () {
   /** 回測用：查看某張照片的模擬標記 */
   function photoTag(fileId) { return photoMeta[fileId] ? clone(photoMeta[fileId]) : null; }
 
-  return { handle: handle, setUser: setUser, getUserKey: getUserKey, setConfig: setConfig, markBroken: markBroken, repair: repair, photoTag: photoTag, fakeUpload: fakeUpload, setResponseLimit: setResponseLimit, aiCalls: aiCalls, aiFailNext: aiFailNext, rosterEmpty: rosterEmpty };
+  return { handle: handle, setUser: setUser, getUserKey: getUserKey, setConfig: setConfig, markBroken: markBroken, repair: repair, photoTag: photoTag, fakeUpload: fakeUpload, setResponseLimit: setResponseLimit, aiCalls: aiCalls, aiFailNext: aiFailNext, rosterEmpty: rosterEmpty, rosterInvalid: rosterInvalid };
 })();
