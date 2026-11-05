@@ -12,9 +12,15 @@ WC.records = (function () {
   const STATUS_CLASS = { '草稿': 'st-draft', '已確認': 'st-ok', '已採用': 'st-used', '不採用': 'st-no' };
   const LABEL = { '草稿': '草稿', '已確認': '已送出', '已採用': '已採用', '不採用': '不採用' };
   const ICON = { '草稿': '✎', '已確認': '➤', '已採用': '✓', '不採用': '–' };
-  const pendingIds = {}; // 一鍵操作進行中的紀錄 ID
+  // 一鍵操作進行中的紀錄 ID：'saving'（送出中）→ 'done'（已存好、等重新載入）。
+  // 'done' 要等 WC.app.reload() 拿到新資料、最後一次重繪前才清掉（clearDone），
+  // 避免中間有別的重繪時，按鈕帶著舊的 updatedAt 又變成可按。
+  const pendingIds = {};
 
   function label(s) { return LABEL[s] || s; }
+  /** 這筆紀錄的一鍵操作（採用、移頁、改版型…）是否進行中；進行中時所有相關按鈕都要停用 */
+  function isPending(id) { return !!pendingIds[id]; }
+  function clearDone() { Object.keys(pendingIds).forEach(function (id) { if (pendingIds[id] === 'done') delete pendingIds[id]; }); }
   function isEditorRole() { return WC.state.me && WC.state.me.role === '主編'; }
   function isMine(r) { return WC.state.me && r.authorEmail === WC.state.me.email; }
 
@@ -58,12 +64,13 @@ WC.records = (function () {
 
   function cardHtml(r) {
     const photos = r.photos || [];
-    const thumbs = photos.slice(0, 4).map(function (p) {
-      return '<img data-photo-id="' + U.esc(p.thumbId) + '" alt="" loading="lazy">';
+    const thumbs = photos.slice(0, 4).map(function (p, i) {
+      return '<button type="button" class="thumb-btn" data-act="view" data-i="' + i + '" aria-label="放大看「' + U.esc(r.title) + '」第 ' + (i + 1) + ' 張照片">' +
+        '<img data-photo-id="' + U.esc(p.thumbId) + '" alt="" loading="lazy"></button>';
     }).join('');
-    const more = photos.length > 4 ? '<span class="more">+' + (photos.length - 4) + '</span>' : '';
+    const more = photos.length > 4 ? '<button type="button" class="thumb-btn more" data-act="view" data-i="4" aria-label="看「' + U.esc(r.title) + '」其餘 ' + (photos.length - 4) + ' 張照片">+' + (photos.length - 4) + '</button>' : '';
     const text = r.newsletter || r.summary || r.rawText || '';
-    const busy = !!pendingIds[r.id];
+    const busy = isPending(r.id);
     const openLabel = !r.canEdit || r.photosBroken ? '檢視' : r.status === '草稿' && isMine(r) ? '繼續' : '編輯';
     let decide = '';
     if (isEditorRole()) {
@@ -71,11 +78,11 @@ WC.records = (function () {
       const used = r.status === '已採用', no = r.status === '不採用';
       decide = '<div class="decide" role="group" aria-label="主編決定">' +
         '<button type="button" class="btn-sm btn-adopt' + (used ? ' on' : '') + '" data-act="adopt" aria-pressed="' + used + '"' + dis + '>' +
-        (used ? '✓ 已採用' : '採用') + '</button>' +
+        (busy ? '處理中…' : used ? '✓ 已採用' : '採用') + '</button>' +
         '<button type="button" class="btn-sm btn-reject' + (no ? ' on' : '') + '" data-act="reject" aria-pressed="' + no + '"' + dis + '>' +
         (no ? '– 不採用' : '不採用') + '</button></div>';
     }
-    return '<article class="card ' + (STATUS_CLASS[r.status] || '') + '-card' + (busy ? ' is-busy' : '') + '" data-id="' + U.esc(r.id) + '">' +
+    return '<article class="card ' + (STATUS_CLASS[r.status] || '') + '-card' + (busy ? ' is-busy' : '') + '" data-id="' + U.esc(r.id) + '"' + (busy ? ' aria-busy="true"' : '') + '>' +
       '<div class="card-top"><span class="unit-tag">' + U.esc(r.unit) + '</span>' + statusBadge(r.status) + '</div>' +
       (r.photosBroken ? '<p class="broken-tag" role="alert">⚠ 照片資料損壞，請聯絡管理者</p>' : '') +
       '<h3>' + U.esc(r.title) + '</h3>' +
@@ -116,7 +123,7 @@ WC.records = (function () {
   /** 只改狀態／單元／版型的一鍵操作（主編）；其他欄位原樣送回，後端規則不變 */
   async function quickUpdate(rec, patch, okMsg) {
     if (pendingIds[rec.id]) return false;
-    pendingIds[rec.id] = true;
+    pendingIds[rec.id] = 'saving';
     WC.app.render();
     const data = {
       id: rec.id, title: rec.title, date: rec.date, unit: rec.unit, rawText: rec.rawText, summary: rec.summary,
@@ -131,9 +138,9 @@ WC.records = (function () {
     } catch (err) {
       U.toast((err && err.code === 'CONFLICT' ? '這筆剛被別人改過，已重新載入，請再按一次。' : '更新失敗：' + U.errMsg(err)), 'error');
     } finally {
-      delete pendingIds[rec.id];
+      pendingIds[rec.id] = 'done';
     }
-    await WC.app.reload();
+    await WC.app.reload(); // 合併重載；resolve 時已是最後一次重繪後的畫面
     return ok;
   }
 
@@ -157,6 +164,7 @@ WC.records = (function () {
       if (!rec) return;
       const act = b.getAttribute('data-act');
       if (act === 'open') { WC.editor.open(rec); return; }
+      if (act === 'view') { WC.viewer.open(WC.viewer.fromPhotos(rec.photos), Number(b.getAttribute('data-i')), b, { title: rec.title, date: rec.date }); return; }
       if (!isEditorRole()) return;
       // 再按一次已選的按鈕＝取消決定，回到「已送出」
       if (act === 'adopt') {
@@ -177,7 +185,7 @@ WC.records = (function () {
   }
 
   return {
-    render: render, bind: bind, isVisible: isVisible, quickUpdate: quickUpdate, findRec: findRec,
+    render: render, bind: bind, isVisible: isVisible, quickUpdate: quickUpdate, findRec: findRec, isPending: isPending, clearDone: clearDone,
     STATUS_CLASS: STATUS_CLASS, STATUSES: STATUSES, label: label, statusBadge: statusBadge
   };
 })();

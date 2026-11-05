@@ -122,7 +122,11 @@ main { max-width: 1120px; margin: 0 auto; padding: 16px; }
 .card.st-used-card { border-left-color: var(--ok); }
 .card.st-no-card { border-left-color: #e6a5a3; }
 .card.st-no-card h3, .card.st-no-card .thumbs { opacity: .6; }
-.card.is-busy { opacity: .6; }
+.card { position: relative; }
+.card.is-busy, .pi.is-busy { opacity: .65; cursor: progress; }
+.card.is-busy::after { content: '處理中…'; position: absolute; top: .6em; left: 50%; transform: translateX(-50%); font-size: .8rem; font-weight: 700;
+  background: var(--sky-deep); color: #fff; border-radius: 999px; padding: .05em .8em; }
+.pi-busy { float: right; font-size: .78rem; font-weight: 700; background: var(--sky-deep); color: #fff; border-radius: 999px; padding: 0 .7em; }
 .card h3 { margin: 0; font-size: 1.05rem; }
 .card-top { display: flex; justify-content: space-between; align-items: center; gap: .5em; }
 .unit-tag { background: var(--cream); border: 1px solid var(--cream-deep); border-radius: 999px; padding: 0 .7em; font-size: .8rem; }
@@ -380,4 +384,43 @@ main { max-width: 1120px; margin: 0 auto; padding: 16px; }
 @media (max-width: 400px) {
   .month-picker strong { font-size: .95rem; }
   #month-input { width: 1.6em; }
+}
+
+/* ===== 照片檢視器 ===== */
+.thumb-btn { padding: 0; border: 0; background: none; cursor: zoom-in; border-radius: 10px; min-width: 44px; min-height: 44px; }
+.thumb-btn img { display: block; }
+.thumbs .thumb-btn.more { min-width: 44px; min-height: 56px; color: var(--muted); cursor: pointer; font: inherit; font-size: .85rem; }
+button.pi-thumb { padding: 0; overflow: hidden; }
+button.pi-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.ph-view { display: block; width: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; }
+.ph-view img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; }
+body.viewer-open { overflow: hidden; }
+.viewer { position: fixed; inset: 0; z-index: 90; background: rgba(20, 30, 40, .94); color: #fff;
+  display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto auto; touch-action: pinch-zoom; }
+.vw-top { display: flex; align-items: center; gap: .8em; padding: 8px 12px; padding-top: calc(8px + env(safe-area-inset-top)); }
+.vw-count { font-weight: 700; font-size: 1rem; }
+.vw-loading { font-size: .85rem; color: var(--cream-deep); }
+.vw-close { margin-left: auto; background: rgba(255,255,255,.95); color: var(--ink); border: 0; }
+.vw-stage { overflow: hidden; display: grid; place-items: center; padding: 0 56px; min-height: 0; touch-action: pinch-zoom pan-y; }
+.vw-img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 10px; user-select: none; -webkit-user-select: none; cursor: zoom-in; background: rgba(255,255,255,.06); }
+.viewer.is-zoomed .vw-stage { overflow: auto; place-items: start; touch-action: auto; }
+.viewer.is-zoomed .vw-img { max-width: none; max-height: none; width: 250%; cursor: zoom-out; }
+.vw-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 48px; height: 64px; border: 0; border-radius: 14px;
+  background: rgba(255,255,255,.9); color: var(--ink); font-size: 2rem; line-height: 1; cursor: pointer; }
+.vw-nav:disabled { opacity: .3; cursor: default; }
+.vw-prev { left: 4px; } .vw-next { right: 4px; }
+.viewer.is-zoomed .vw-nav { display: none; }
+.vw-cap { margin: .4em 16px 0; text-align: center; font-size: .95rem; }
+.vw-dl { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: .5em; padding: .6em 16px 0; }
+.vw-dl .btn { background: rgba(255,255,255,.95); color: var(--ink); border: 0; }
+.vw-dl .btn:disabled { opacity: .55; }
+.vw-dl-prog { font-size: .9rem; color: var(--cream); }
+.vw-dl-prog:empty { display: none; }
+.vw-dl-note { flex-basis: 100%; margin: 0; text-align: center; font-size: .82rem; color: var(--cream); }
+.vw-hint { margin: .3em 16px; padding-bottom: env(safe-area-inset-bottom); text-align: center; font-size: .78rem; color: #b7c4cf; }
+@media (max-width: 759px) {
+  .vw-stage { padding: 0 8px; }
+  .vw-nav { width: 44px; height: 56px; background: rgba(255,255,255,.75); }
+  .vw-hint { display: none; }
+  .vw-dl .btn { flex: 1 1 40%; }
 }

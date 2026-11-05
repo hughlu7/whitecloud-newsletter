@@ -167,6 +167,7 @@ WC.editor = (function () {
     U.$('#editor-broken-note').hidden = !broken;
     U.$('#editor-readonly-note').hidden = !readOnly || broken;
     U.$('#photo-undo').hidden = true;
+    U.$('#photo-status').textContent = ''; // 上一筆中途關閉時殘留的「壓縮中…」文字
     U.$('#leave-ask').hidden = true;
     U.$('#advanced').open = !!(rec && (rec.summary || rec.newsletter) && readOnly);
 
@@ -278,9 +279,10 @@ WC.editor = (function () {
     const grid = U.$('#photo-grid');
     grid.innerHTML = photos.map(function (p, i) {
       const img = p.kind === 'saved'
-        ? '<img data-photo-id="' + U.esc(p.photo.thumbId) + '" alt="活動照片 ' + (i + 1) + '">'
-        : '<img src="' + U.esc(p.previewUrl) + '" alt="新照片 ' + (i + 1) + '">';
-      return '<figure class="ph" data-key="' + p.key + '">' + img +
+        ? '<img data-photo-id="' + U.esc(p.photo.thumbId) + '" alt="">'
+        : '<img src="' + U.esc(p.previewUrl) + '" alt="">';
+      return '<figure class="ph" data-key="' + p.key + '">' +
+        '<button type="button" class="ph-view" data-ph="view" aria-label="放大看第 ' + (i + 1) + ' 張' + (p.kind === 'pending' ? '（待上傳）' : '') + '照片">' + img + '</button>' +
         '<figcaption>' + (i === 0 ? '<span class="badge-cover">封面</span> ' : '') +
         (p.kind === 'pending' ? '<span class="badge-new">待上傳</span> ' : '') + U.esc(p.note) + '</figcaption>' +
         (readOnly ? '' : '<div class="ph-tools">' +
@@ -345,11 +347,21 @@ WC.editor = (function () {
 
   function onPhotoTool(e) {
     const b = e.target.closest('[data-ph]');
-    if (!b || busy) return;
+    if (!b || (busy && b.getAttribute('data-ph') !== 'view')) return;
     const key = b.closest('.ph').getAttribute('data-key');
     const i = photos.findIndex(function (p) { return p.key === key; });
     if (i < 0) return;
     const act = b.getAttribute('data-ph');
+    if (act === 'view') {
+      // 待上傳的照片用本機預覽圖；已存的用原圖。只讀，不改動 photos 陣列與排序
+      const list = photos.map(function (p) {
+        return p.kind === 'saved' && p.photo
+          ? { thumbId: p.photo.thumbId, fullId: p.photo.id, caption: p.photo.caption || p.photo.note || '' }
+          : { localUrl: p.previewUrl, fullB64: p.b64, caption: '' };
+      });
+      WC.viewer.open(list, i, b, { title: field('title').value.trim() || autoTitle(), date: field('date').value });
+      return;
+    }
     if (act === 'remove') {
       if (lastRemoved) revokePreview(lastRemoved.item);
       lastRemoved = { item: photos.splice(i, 1)[0], index: i };
@@ -493,10 +505,16 @@ WC.editor = (function () {
    * 主編在進階改過狀態時，一律以主編選的為準。
    */
   function finalStatus(mode) {
-    if (statusTouched && isEditorRole()) return field('status').value;
+    if (isEditorRole()) {
+      if (statusTouched) return field('status').value;
+      if (mode === 'draft') return '草稿';
+      if (current && (mode === 'keep' || FINAL.indexOf(current.status) >= 0 || current.status === '已確認')) return current.status;
+      return mode === 'keep' ? '草稿' : '已確認';
+    }
+    // 非主編的最後防線（Gemini 審查）：只能送「草稿」或「已確認」，不論 current.status 為何
     if (mode === 'draft') return '草稿';
-    if (current && (mode === 'keep' || FINAL.indexOf(current.status) >= 0 || current.status === '已確認')) return current.status;
-    return mode === 'keep' ? '草稿' : '已確認';
+    if (mode === 'keep' && (!current || current.status === '草稿')) return '草稿';
+    return '已確認';
   }
 
   function collect(mode) {
@@ -643,7 +661,7 @@ WC.editor = (function () {
     });
     U.$('#photo-grid').addEventListener('click', onPhotoTool);
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && !U.$('#editor').hidden) { e.preventDefault(); requestClose(); }
+      if (e.key === 'Escape' && !U.$('#editor').hidden && !WC.viewer.isOpen()) { e.preventDefault(); requestClose(); }
     });
     // 旋轉平板或縮放視窗時，在逐步／並排間切換
     const onMq = function () { if (!U.$('#editor').hidden) applyStepMode(); };

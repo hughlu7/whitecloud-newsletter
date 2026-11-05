@@ -42,7 +42,8 @@ WC.layout = (function () {
   function isEditorRole() { return WC.state.me && WC.state.me.role === '主編'; }
 
   function itemHtml(r, units, canAct) {
-    const busy = r.photosBroken;
+    const pending = WC.records.isPending(r.id);
+    const busy = r.photosBroken || pending;
     let tools = '';
     if (canAct) {
       const layouts = WC.state.config.layouts;
@@ -56,17 +57,18 @@ WC.layout = (function () {
       if (movingId === r.id) {
         tools += '<div class="move-menu" role="group" aria-label="移到哪一頁">' + units.map(function (u, i) {
           const here = u === r.unit;
-          return '<button type="button" class="btn-sm" data-act="to" data-v="' + U.esc(u) + '"' + (here ? ' disabled aria-current="true"' : '') + '>' +
+          return '<button type="button" class="btn-sm" data-act="to" data-v="' + U.esc(u) + '"' + (here ? ' disabled aria-current="true"' : busy ? ' disabled' : '') + '>' +
             (i + 1) + '. ' + U.esc(u) + (here ? '（目前）' : '') + '</button>';
         }).join('') +
-          '<button type="button" class="btn-sm btn-out" data-act="out">移出六頁</button>' +
-          '<button type="button" class="btn-sm" data-act="move-cancel">取消</button></div>';
+          '<button type="button" class="btn-sm btn-out" data-act="out"' + (busy ? ' disabled' : '') + '>移出六頁</button>' +
+          '<button type="button" class="btn-sm" data-act="move-cancel"' + (pending ? ' disabled' : '') + '>取消</button></div>';
       }
     }
     const photos = r.photos || [];
-    return '<li class="pi" data-id="' + U.esc(r.id) + '">' +
+    return '<li class="pi' + (pending ? ' is-busy' : '') + '" data-id="' + U.esc(r.id) + '"' + (pending ? ' aria-busy="true"' : '') + '>' +
+      (pending ? '<span class="pi-busy" role="status">處理中…</span>' : '') +
       '<div class="pi-main">' +
-      (photos.length ? '<img data-photo-id="' + U.esc(photos[0].thumbId) + '" alt="" class="pi-thumb">' : '<span class="pi-thumb pi-nophoto" aria-hidden="true">✎</span>') +
+      (photos.length ? '<button type="button" class="thumb-btn pi-thumb" data-act="view" aria-label="放大看「' + U.esc(r.title) + '」的 ' + photos.length + ' 張照片"><img data-photo-id="' + U.esc(photos[0].thumbId) + '" alt=""></button>' : '<span class="pi-thumb pi-nophoto" aria-hidden="true">✎</span>') +
       '<div><b class="pi-title">' + U.esc(r.title) + '</b><small class="muted">' + photos.length + ' 張 · ' + U.esc(r.layout || '未定版型') + ' · ' + U.esc(r.authorName) + '</small></div>' +
       '</div>' + tools + '</li>';
   }
@@ -107,10 +109,13 @@ WC.layout = (function () {
     box.innerHTML = '<h3>待挑選 <small class="muted">' + pool.length + ' 筆已送出、還沒決定</small></h3>' +
       (pool.length ? '<ul class="pool-list">' + pool.map(function (r) {
         const ph = r.photos || [];
-        return '<li class="pi" data-id="' + U.esc(r.id) + '"><div class="pi-main">' +
-          (ph.length ? '<img data-photo-id="' + U.esc(ph[0].thumbId) + '" alt="" class="pi-thumb">' : '<span class="pi-thumb pi-nophoto" aria-hidden="true">✎</span>') +
+        const pending = WC.records.isPending(r.id);
+        return '<li class="pi' + (pending ? ' is-busy' : '') + '" data-id="' + U.esc(r.id) + '"' + (pending ? ' aria-busy="true"' : '') + '>' +
+          (pending ? '<span class="pi-busy" role="status">處理中…</span>' : '') + '<div class="pi-main">' +
+          (ph.length ? '<button type="button" class="thumb-btn pi-thumb" data-act="view" aria-label="放大看「' + U.esc(r.title) + '」的 ' + ph.length + ' 張照片"><img data-photo-id="' + U.esc(ph[0].thumbId) + '" alt=""></button>' : '<span class="pi-thumb pi-nophoto" aria-hidden="true">✎</span>') +
           '<div><b class="pi-title">' + U.esc(r.title) + '</b><small class="muted">' + U.esc(r.unit) + ' · ' + ph.length + ' 張 · ' + U.esc(r.authorName) + '</small></div></div>' +
-          '<div class="pi-tools"><button type="button" class="btn-sm btn-adopt" data-act="adopt"' + (r.photosBroken ? ' disabled' : '') + '>採用到「' + U.esc(r.unit) + '」</button>' +
+          '<div class="pi-tools"><button type="button" class="btn-sm btn-adopt" data-act="adopt"' + (r.photosBroken || pending ? ' disabled' : '') + '>' +
+          (pending ? '處理中…' : '採用到「' + U.esc(r.unit) + '」') + '</button>' +
           '<button type="button" class="btn-sm" data-act="open">看內容</button></div></li>';
       }).join('') + '</ul>' : '<p class="muted small">目前沒有待挑選的素材。</p>');
   }
@@ -140,11 +145,13 @@ WC.layout = (function () {
       if (!rec) return;
       const act = b.getAttribute('data-act'), v = b.getAttribute('data-v');
       if (act === 'open') { WC.editor.open(rec); return; }
-      if (!isEditorRole()) return;
+      if (act === 'view') { WC.viewer.open(WC.viewer.fromPhotos(rec.photos), 0, b, { title: rec.title, date: rec.date }); return; }
+      if (!isEditorRole() || WC.records.isPending(rec.id)) return;
       if (act === 'move') { movingId = movingId === rec.id ? '' : rec.id; render(); focusIn(rec.id, movingId ? '.move-menu button:not(:disabled)' : '[data-act="move"]'); return; }
       if (act === 'move-cancel') { movingId = ''; render(); focusIn(rec.id, '[data-act="move"]'); return; }
       if (act === 'to') {
         movingId = '';
+        // quickUpdate 會等 WC.app.reload() 合併後的「最後一次重繪」完成才 resolve，焦點不會被之後的重繪吃掉
         WC.records.quickUpdate(rec, { unit: v }, '「' + rec.title + '」移到「' + v + '」頁').then(function () { focusIn(rec.id, '[data-act="move"]'); });
       }
       if (act === 'out') { movingId = ''; WC.records.quickUpdate(rec, { status: '已確認' }, '「' + rec.title + '」已移出六頁，回到待挑選'); }

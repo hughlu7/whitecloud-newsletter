@@ -71,18 +71,46 @@ WC.app = (function () {
   }
 
   /** 重新向後端要該月紀錄並重畫 */
-  async function reload() {
-    U.$('#month-label').textContent = U.monthLabel(WC.state.month);
-    U.$('#month-input').value = WC.state.month;
-    U.$('#record-list').innerHTML = '<div class="empty">載入中…</div>';
+  /**
+   * 重新向後端要該月紀錄並重畫。
+   * 合併呼叫（Gemini 審查）：同一時間只跑一次；進行中又被呼叫，就標記「結束後再跑一次」，
+   * 全部跑完才重畫一次。所有呼叫者拿到同一個 Promise，resolve 時畫面已是最後狀態。
+   */
+  let reloading = null;
+  let reloadAgain = false;
+  let reloadCount = 0;   // 回測用：實際呼叫 listRecords 的次數
+  let loadedMonth = '';
+
+  function reload() {
+    if (reloading) { reloadAgain = true; return reloading; }
+    reloading = (async function () {
+      do {
+        reloadAgain = false;
+        await loadOnce();
+      } while (reloadAgain);
+      WC.records.clearDone();
+      render();
+    })().finally(function () { reloading = null; });
+    return reloading;
+  }
+
+  async function loadOnce() {
+    const month = WC.state.month;
+    U.$('#month-label').textContent = U.monthLabel(month);
+    U.$('#month-input').value = month;
+    // 只有換月份（或第一次）才清成「載入中…」；同月重載保留卡片，避免連點時按鈕消失
+    if (month !== loadedMonth) U.$('#record-list').innerHTML = '<div class="empty">載入中…</div>';
+    reloadCount += 1;
     try {
-      const res = await WC.api.listRecords(WC.state.month);
+      const res = await WC.api.listRecords(month);
+      if (month !== WC.state.month) { reloadAgain = true; return; } // 途中換了月份：丟棄並重跑
       WC.state.records = res.records;
+      loadedMonth = month;
     } catch (e) {
       WC.state.records = [];
+      loadedMonth = '';
       U.toast('讀取紀錄失敗：' + U.errMsg(e), 'error');
     }
-    render();
   }
 
   function render() {
@@ -148,7 +176,7 @@ WC.app = (function () {
     });
   }
 
-  return { start: start, reload: reload, render: render, afterSave: afterSave };
+  return { start: start, reload: reload, render: render, afterSave: afterSave, reloadCount: function () { return reloadCount; } };
 })();
 
 document.addEventListener('DOMContentLoaded', WC.app.start);
