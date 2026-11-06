@@ -12,32 +12,39 @@ WC.api = (function () {
   const isDemo = forceDemo || !cfg.GAS_URL || !cfg.CLIENT_ID;
 
   let idToken = '';
+  const REQUEST_TIMEOUT_MS = 120000;
   function setToken(t) { idToken = t || ''; }
 
   /** 送一個 action 到 GAS；失敗時丟出 Error（帶 code） */
   async function call(action, params) {
     if (isDemo) return WC.demo.handle(action, params || {});
+    const sent = idToken;   // 這個請求用的 token（回來時若已換新 token，不要因舊 token 失效而登出）
     let res;
+    // v2.4.0：網路卡住時不要讓「送出」永遠等下去（GAS 冷啟動加上傳最慢約 30–60 秒，給 120 秒）
+    const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(function () { ctrl.abort(); }, REQUEST_TIMEOUT_MS) : null;
     try {
       res = await fetch(cfg.GAS_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: action, params: params || {}, idToken: idToken }),
-        redirect: 'follow'
+        body: JSON.stringify({ action: action, params: params || {}, idToken: sent }),
+        redirect: 'follow',
+        signal: ctrl ? ctrl.signal : undefined
       });
     } catch (e) {
+      if (timer) clearTimeout(timer);
+      if (e && e.name === 'AbortError') throw makeError('TIMEOUT', '伺服器太久沒有回應，請稍後再試。');
       throw makeError('NETWORK', '連不上伺服器，請檢查網路連線。');
     }
+    if (timer) clearTimeout(timer);
     let body;
     try { body = await res.json(); } catch (e) {
       throw makeError('BAD_RESPONSE', '伺服器回應格式錯誤（HTTP ' + res.status + '），請確認 GAS 已部署且存取權為「任何人」。');
     }
     if (!body.ok) {
       const err = makeError(body.error && body.error.code, body.error && body.error.message);
-      if (body.error && body.error.warnings) err.warnings = body.error.warnings; // NEED_CONFIRM 的提醒清單
-      if (body.error && body.error.splitWarnings) err.splitWarnings = body.error.splitWarnings; // v2.3.1：可能是名字、已換成 [S?] 的段落
-      if (body.error && body.error.candidates) err.candidates = body.error.candidates; // 稱呼對到多位學生時的候選姓名（只含相符者）
-      if (err.code === 'BAD_TOKEN' || err.code === 'NO_TOKEN') WC.auth.onTokenInvalid();
+      // v2.4：同時有好幾個請求（bootstrap＋listRecords、照片並行）都回 BAD_TOKEN 時，只處理一次
+      if ((err.code === 'BAD_TOKEN' || err.code === 'NO_TOKEN') && sent === idToken) WC.auth.onTokenInvalid();
       throw err;
     }
     return body.data;
@@ -63,7 +70,7 @@ WC.api = (function () {
       return call('uploadPhoto', { month: month, full: full, thumb: thumb, w: w, h: h });
     },
     getPhotos: function (ids) { return call('getPhotos', { ids: ids }); },
-    /** 第 2 階段：AI 整理。record 只含 title、date、unit、layout、rawText、photoCount、photoNotes（不含照片本身） */
-    aiDraft: function (record, confirm) { return call('aiDraft', { record: record, confirm: !!confirm }); }
+    /** 第 2 階段：AI 整理。record 只含 title、date、unit、layout、rawText、photoCount、photoNotes（不含照片本身；v2.4 起原文直接送出） */
+    aiDraft: function (record) { return call('aiDraft', { record: record }); }
   };
 })();

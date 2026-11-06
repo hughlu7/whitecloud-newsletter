@@ -6,7 +6,7 @@
   <meta name="referrer" content="strict-origin-when-cross-origin">
   <meta name="robots" content="noindex, nofollow">
   <!-- CSP：只允許本站與 Google 登入／Apps Script；禁止 inline script（XSS 縱深防禦） -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://script.google.com https://script.googleusercontent.com https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://script.google.com/macros/s/AKfycbwhsgUlKexEtuuUbijzHKZZHJpE6HuJr1fknJw_3_b7hMcugbHxkVmETgc6EOCJ_M7xHg/exec https://script.googleusercontent.com https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; object-src 'none'; base-uri 'self'; form-action 'none'">
   <title>白雲家訊</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="css/style.css">
@@ -153,6 +153,7 @@
         </section>
       </section>
     </main>
+    <p id="app-version" class="app-version"></p>
   </div>
 
   <!-- 新增／編輯活動紀錄視窗 -->
@@ -201,21 +202,7 @@
               <div id="ai-box" class="ai-box" hidden>
                 <button type="button" id="btn-ai" class="btn btn-ai" disabled>✨ AI 幫我整理</button>
                 <span id="ai-status" class="muted small" role="status" aria-live="polite"></span>
-                <p id="ai-roster-note" class="ai-roster-note" role="status" hidden></p>
-                <p class="muted small ai-hint">會把學生名字換成代號再送出；口述內容請先確認名字有沒有被辨識成別的字。想指定是哪位孩子，可以寫成 [[王小明]]。</p>
-                <div id="ai-confirm" class="ai-confirm" role="alertdialog" aria-labelledby="ai-confirm-h" hidden>
-                  <p id="ai-confirm-h"><b>送出前請確認：</b></p>
-                  <ul id="ai-confirm-list"></ul>
-                  <div id="ai-split" class="ai-split" hidden>
-                    <p class="small"><b>以下可能是孩子的名字，送出時會用 [S?] 代替：</b></p>
-                    <ul id="ai-split-list"></ul>
-                  </div>
-                  <div id="ai-candidates" class="ai-candidates" hidden></div>
-                  <div class="ai-actions">
-                    <button type="button" id="ai-confirm-go" class="btn btn-primary">照樣送出</button>
-                    <button type="button" id="ai-confirm-back" class="btn">回去修改</button>
-                  </div>
-                </div>
+                <p id="ai-privacy-note" class="muted small ai-hint">按 AI 整理時，文字（含孩子名字）會送到 Anthropic 處理</p>
                 <div id="ai-overwrite" class="ai-confirm" role="alertdialog" aria-labelledby="ai-overwrite-h" hidden>
                   <p id="ai-overwrite-h"><b>摘要、文案或圖說已經有內容，要用 AI 的結果覆蓋嗎？</b></p>
                   <div class="ai-actions">

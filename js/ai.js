@@ -1,11 +1,10 @@
 /**
- * 「AI 幫我整理」（第 2 階段，v2.0）。
+ * 「AI 幫我整理」（第 2 階段；v2.4 起不使用學生名單與去名化）。
  *
  * 流程：說一說有內容才能按 → WC.api.aiDraft(record) →
- *   - NEED_CONFIRM：顯示去名化疑點（例如「安安」可能是兩位孩子），老師選「照樣送出」（confirm:true 再送一次）或回去修改
  *   - 成功：摘要、文案、圖說已有內容時先詢問「覆蓋／只填空白／不要」，再填進欄位（不直接存檔），並顯示 AI 警告
  *   - 失敗：顯示錯誤，不改任何欄位
- * 送到後端的只有文字欄位與照片張數、老師備註；學生名單與去名化都在伺服器端（GAS），前端拿不到名單。
+ * 送到後端的只有文字欄位（原文，含孩子的名字）與照片張數、老師備註；按鈕旁固定提示會送到 Anthropic 處理。
  * 所有文字一律用 textContent。
  */
 WC.ai = (function () {
@@ -25,22 +24,10 @@ WC.ai = (function () {
     box.hidden = !enabled();
     if (!enabled()) return;
     const btn = U.$('#btn-ai');
-    const ready = WC.state.ai.rosterReady !== false;   // v2.1 H1：名單沒有啟用學生時停用
-    const can = ready && !running && WC.editor.aiCanUse();
+    const can = !running && WC.editor.aiCanUse();
     btn.disabled = !can;
-    btn.title = !ready ? '學生名單需要先修正' : can ? '' : '先在上面寫下或口述原始紀錄';
+    btn.title = can ? '' : '先在上面寫下或口述原始紀錄';
     btn.textContent = running ? '✨ 整理中…' : '✨ AI 幫我整理';
-    const note = U.$('#ai-roster-note');
-    note.hidden = ready;
-    note.textContent = ready ? '' : rosterNote(WC.state.ai);
-  }
-
-  /** 名單問題說明（v2.2 N1：只顯示列號，不顯示姓名） */
-  function rosterNote(ai) {
-    const inv = ai.invalidRows || [], dup = ai.duplicateRows || [];
-    if (inv.length) return '學生名單第 ' + inv.join('、') + ' 列代號有誤（應寫成 S1、S2…），請管理者修正後才能使用 AI 整理。';
-    if (ai.duplicateCodes) return '學生名單' + (dup.length ? '第 ' + dup.join('、') + ' 列' : '') + '有重複的代號，請管理者修正後才能使用 AI 整理。';
-    return '請先在試算表的「學生名單」分頁填寫學生名單，才能使用 AI 整理（送出前要把孩子的名字換成代號）。';
   }
 
   function reset() {
@@ -48,7 +35,6 @@ WC.ai = (function () {
     running = false;
     pending = null;
     setStatus('');
-    U.$('#ai-confirm').hidden = true;
     U.$('#ai-overwrite').hidden = true;
     showWarnings([]);
     refresh();
@@ -67,21 +53,18 @@ WC.ai = (function () {
 
   const MESSAGES = {
     TOO_SHORT: '原始紀錄太短，AI 沒有東西可以整理；請多寫幾句再試。',
-    ROSTER_EMPTY: '請先在試算表的「學生名單」分頁填寫學生名單，才能使用 AI 整理。',
-    ROSTER_DUPLICATE: null, ROSTER_INVALID: null, NAME_LEAK: null,   // 用後端訊息（含列號或改寫建議）
     AI_LIMIT: null, AI_BUSY: null, AI_ERROR: null, AI_DISABLED: null
   };
 
-  async function run(confirm) {
+  async function run() {
     if (running || !WC.editor.aiCanUse()) return;
     const my = ++seq;
     running = true;
-    U.$('#ai-confirm').hidden = true;
     showWarnings([]);
     setStatus('AI 整理中，大約 5–15 秒…');
     refresh();
     try {
-      const data = await WC.api.aiDraft(WC.editor.aiInput(), confirm);
+      const data = await WC.api.aiDraft(WC.editor.aiInput());
       if (my !== seq) return;
       if (WC.editor.aiHasContent()) {
         pending = data;
@@ -93,62 +76,10 @@ WC.ai = (function () {
       }
     } catch (e) {
       if (my !== seq) return;
-      if (e.code === 'NEED_CONFIRM') {
-        showConfirm(e.warnings || [], e.candidates || [], e.splitWarnings || []);
-        setStatus('');
-      } else {
-        setStatus('AI 整理失敗：' + ((MESSAGES[e.code]) || U.errMsg(e)) + '（欄位沒有被改動）');
-      }
+      setStatus('AI 整理失敗：' + ((MESSAGES[e.code]) || U.errMsg(e)) + '（欄位沒有被改動）');
     } finally {
       if (my === seq) { running = false; refresh(); }
     }
-  }
-
-  /**
-   * NEED_CONFIRM：列出提醒；稱呼對到多位學生時，列出候選姓名按鈕（v2.1）。
-   * 點選後在原始紀錄把那個稱呼換成 [[姓名]] 標記（只換第一個還沒標記的），全部選完自動再送一次。
-   * 候選姓名只有「與這個稱呼相符」的學生（伺服器只回這些），不會拿到整份名單。
-   */
-  function showConfirm(warnings, candidates, splits) {
-    const ul = U.$('#ai-confirm-list');
-    ul.innerHTML = '';
-    warnings.forEach(function (w) { const li = document.createElement('li'); li.textContent = w; ul.appendChild(li); });
-    ul.hidden = !warnings.length;
-    // v2.3.1 M1：可能是被符號隔開的名字，分開顯示
-    const sl = U.$('#ai-split-list');
-    sl.innerHTML = '';
-    (splits || []).forEach(function (w) { const li = document.createElement('li'); li.textContent = w; sl.appendChild(li); });
-    U.$('#ai-split').hidden = !(splits && splits.length);
-    const pick = U.$('#ai-candidates');
-    pick.innerHTML = '';
-    candidates.forEach(function (c) {
-      const row = document.createElement('div');
-      row.className = 'ai-cand';
-      const lab = document.createElement('span');
-      lab.textContent = '「' + c.text + '」是：';
-      row.appendChild(lab);
-      (c.names || []).forEach(function (n) {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'btn-sm ai-cand-btn';
-        b.textContent = n;
-        b.addEventListener('click', function () {
-          if (WC.editor.aiMarkName(c.text, n)) {
-            row.classList.add('done');
-            Array.prototype.forEach.call(row.querySelectorAll('button'), function (x) { x.disabled = true; x.classList.toggle('on', x === b); });
-            if (!pick.querySelector('.ai-cand:not(.done)')) run(false);   // 全部選完：用新的標記再送一次（仍會經過伺服器檢查）
-          } else {
-            setStatus('原始紀錄裡找不到「' + c.text + '」，請直接修改後再按 AI。');
-          }
-        });
-        row.appendChild(b);
-      });
-      pick.appendChild(row);
-    });
-    pick.hidden = !candidates.length;
-    U.$('#ai-confirm').hidden = false;
-    const first = pick.querySelector('button') || U.$('#ai-confirm-go');
-    first.focus();
   }
 
   function apply(data, onlyEmpty) {
@@ -163,13 +94,7 @@ WC.ai = (function () {
   }
 
   function bind() {
-    U.$('#btn-ai').addEventListener('click', function () { run(false); });
-    U.$('#ai-confirm-go').addEventListener('click', function () { run(true); });
-    U.$('#ai-confirm-back').addEventListener('click', function () {
-      U.$('#ai-confirm').hidden = true;
-      const t = document.querySelector('#editor-form [name=rawText]');
-      if (t) t.focus();
-    });
+    U.$('#btn-ai').addEventListener('click', function () { run(); });
     U.$('#ai-overwrite-yes').addEventListener('click', function () { if (pending) apply(pending, false); });
     U.$('#ai-overwrite-empty').addEventListener('click', function () { if (pending) apply(pending, true); });
     U.$('#ai-overwrite-no').addEventListener('click', function () {

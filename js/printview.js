@@ -46,7 +46,7 @@ WC.printview = (function () {
 
   const WAIT_MAX_MS = 60000;   // v2.1 M6：等待原圖、字型最多 60 秒
 
-  /** v2.1：印給家長前的內容檢查（代號、待補充、隱私字眼），以及相簿圖說被收起或截斷。回傳追加的 issues */
+  /** v2.1：印給家長前的內容檢查（待補充、隱私字眼），以及相簿圖說被收起或截斷。回傳追加的 issues */
   function contentIssues(P, box) {
     const out = [];
     const byId = {};
@@ -128,35 +128,46 @@ WC.printview = (function () {
     await Promise.all(list.map(function (p) { return WC.photos.get(p.thumbId); }));
   }
 
-  /** 分批載入原圖；後端回 deferred 的下一輪再要。回傳失敗張數 */
+  /**
+   * 分批載入原圖；後端回 deferred 的下一輪再要。回傳失敗張數。
+   * v2.4 F4：同時送 2 批（原本一批等一批）。每批仍 ≤BATCH 張、後端仍以回應上限分批（deferred），單一回應大小不變。
+   */
+  const FULL_PARALLEL = 2;
   async function loadFull(list, onProgress) {
     const need = list.map(function (p) { return p.id; }).filter(function (id, i, a) { return !(id in fullCache) && a.indexOf(id) === i; });
     const total = need.length;
     let queue = need.slice();
     let done = 0, failed = 0, guard = 0;
     if (onProgress) onProgress(0, total);
-    while (queue.length && guard++ < 200) {
-      const batch = queue.slice(0, BATCH);
-      queue = queue.slice(BATCH);
-      let res;
-      try {
-        fetchCalls += 1;
-        res = await WC.api.getPhotos(batch);
-      } catch (e) {
-        failed += batch.length; done += batch.length;
+    async function worker() {
+      while (queue.length && guard++ < 200) {
+        const batch = queue.slice(0, BATCH);
+        queue = queue.slice(BATCH);
+        let res;
+        try {
+          fetchCalls += 1;
+          res = await WC.api.getPhotos(batch);
+        } catch (e) {
+          failed += batch.length; done += batch.length;
+          if (onProgress) onProgress(done, total);
+          continue;
+        }
+        const deferred = res.deferred || [];
+        batch.forEach(function (id) {
+          if (deferred.indexOf(id) >= 0) return;
+          fullCache[id] = (res.photos || {})[id] || null;
+          if (!fullCache[id]) failed += 1;
+          done += 1;
+        });
+        queue = deferred.concat(queue);
         if (onProgress) onProgress(done, total);
-        continue;
       }
-      const deferred = res.deferred || [];
-      batch.forEach(function (id) {
-        if (deferred.indexOf(id) >= 0) return;
-        fullCache[id] = (res.photos || {})[id] || null;
-        if (!fullCache[id]) failed += 1;
-        done += 1;
-      });
-      queue = deferred.concat(queue);
-      if (onProgress) onProgress(done, total);
     }
+    const workers = [];
+    for (let k = 0; k < FULL_PARALLEL; k++) workers.push(worker());
+    await Promise.all(workers);
+    // 一個 worker 結束時另一個可能剛把 deferred 放回佇列：最後再收尾一次
+    if (queue.length) await worker();
     return failed;
   }
 
@@ -284,7 +295,7 @@ WC.printview = (function () {
     const cut = U.$('#print-confirm-cut');
     cut.hidden = n === 0;
     cut.textContent = n ? '有 ' + n + ' 處內容被截斷，仍要列印嗎？' : '';
-    // v2.1：要給家長看的文字有代號、待補充、隱私字眼 → 「有 N 處待處理」；圖說被收起或截斷 → 黃色提醒
+    // v2.1：要給家長看的文字有待補充、隱私字眼 → 「有 N 處待處理」；圖說被收起或截斷 → 黃色提醒
     const content = current ? current.issues.filter(function (i) { return i.kind === 'content'; }) : [];
     const caps = current ? current.issues.filter(function (i) { return i.kind === 'caption'; }) : [];
     const todo = U.$('#print-confirm-todo');

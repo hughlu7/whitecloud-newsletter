@@ -29,20 +29,26 @@ WC.app = (function () {
   }
 
   async function afterSignIn() {
+    // v2.4 F4：bootstrap 與該月紀錄同時送出（兩者互不相依），省一次往返；畫面仍等 bootstrap 的設定到了才畫
+    const month = WC.state.month;
+    const prefetch = { month: month, p: WC.api.listRecords(month).then(function (r) { return { ok: true, r: r }; }, function (e) { return { ok: false, e: e }; }) };
     try {
       const b = await WC.api.bootstrap();
       WC.state.me = b.me;
       WC.state.config = b.config;
       WC.state.ai = b.ai || { enabled: false };
-      WC.state.roster = b.roster || null; // 只有筆數與是否有重複稱呼，沒有姓名
       renderBrokenBanner(b.me, b.brokenRows || []);
       document.title = b.config.newsletterName + '｜' + b.config.className;
       U.$('#brand-name').textContent = b.config.newsletterName;
       U.$('#brand-class').textContent = b.config.className;
       U.$('#who').textContent = b.me.name + '（' + b.me.role + '）';
+      // 版本：前端與後端不同時一併顯示，方便確認部署是否完成
+      U.$('#app-version').textContent = '白雲家訊 v' + WC.VERSION +
+        (b.version && b.version !== 'demo' && b.version !== WC.VERSION ? '（後端 v' + b.version + '，請確認兩邊都已更新）' : '');
       U.$('#app').hidden = false;
-      await reload();
+      await reload(prefetch);
     } catch (e) {
+      if (e.code === 'NOT_MEMBER') WC.auth.forget();   // 換帳號重新整理時不要再用這個登入
       if (e.code === 'NOT_MEMBER' || e.code === 'NOT_SETUP') showFatal(e.message);
       else if (e.code !== 'BAD_TOKEN' && e.code !== 'NO_TOKEN') showFatal('載入失敗：' + U.errMsg(e));
     }
@@ -85,12 +91,14 @@ WC.app = (function () {
   let reloadCount = 0;   // 回測用：實際呼叫 listRecords 的次數
   let loadedMonth = '';
 
-  function reload() {
+  function reload(prefetch) {
     if (reloading) { reloadAgain = true; return reloading; }
     reloading = (async function () {
+      let pre = prefetch || null;
       do {
         reloadAgain = false;
-        await loadOnce();
+        await loadOnce(pre);
+        pre = null;   // 預先抓的結果只用一次；之後的重跑一律重新抓
       } while (reloadAgain);
       WC.records.clearDone();
       render();
@@ -98,7 +106,7 @@ WC.app = (function () {
     return reloading;
   }
 
-  async function loadOnce() {
+  async function loadOnce(pre) {
     const month = WC.state.month;
     U.$('#month-label').textContent = U.monthLabel(month);
     U.$('#month-input').value = month;
@@ -106,7 +114,14 @@ WC.app = (function () {
     if (month !== loadedMonth) U.$('#record-list').innerHTML = '<div class="empty">載入中…</div>';
     reloadCount += 1;
     try {
-      const res = await WC.api.listRecords(month);
+      let res;
+      if (pre && pre.month === month) {
+        const x = await pre.p;
+        if (!x.ok) throw x.e;
+        res = x.r;
+      } else {
+        res = await WC.api.listRecords(month);
+      }
       if (month !== WC.state.month) { reloadAgain = true; return; } // 途中換了月份：丟棄並重跑
       WC.state.records = res.records;
       loadedMonth = month;
@@ -138,7 +153,16 @@ WC.app = (function () {
       : '正在看 ' + U.monthLabel(WC.state.month) + '（新增時日期預設該月 1 日）';
   }
 
-  /** 儲存後：若紀錄被歸到別的月份，切過去，讓使用者看得到 */
+  /** 與後端 listRecords 相同的排序：活動日期，再依建立時間 */
+  function sortRecords(list) {
+    return list.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : (a.createdAt < b.createdAt ? -1 : 1); });
+  }
+
+  /**
+   * 儲存後：若紀錄被歸到別的月份，切過去，讓使用者看得到。
+   * v2.4 F2：同月份時直接用後端回傳的 record 更新本地清單並重畫，不再整月重抓（省一次 listRecords 往返）。
+   * 正在重載中（例如剛按了採用）時，那次重載可能是存檔前抓的，改為讓它結束後再抓一次，避免舊資料蓋掉新紀錄。
+   */
   async function afterSave(rec) {
     if (rec.month !== WC.state.month) {
       U.toast('這筆紀錄依活動日期歸到 ' + U.monthLabel(rec.month) + '，已切換月份。', 'info');
@@ -150,8 +174,22 @@ WC.app = (function () {
       WC.state.filterUnit = '';
       WC.state.filterStatus = '';
     }
-    await reload();
+    if (reloading) { await reload(); return; }
+    const list = WC.state.records.filter(function (r) { return r.id !== rec.id; });
+    list.push(rec);
+    WC.state.records = sortRecords(list);
+    localUpdates += 1;
+    render();
   }
+
+  /** v2.4 F2：刪除後直接從本地清單移除（同樣避開重載中的競態） */
+  async function afterDelete(id) {
+    if (reloading) { await reload(); return; }
+    WC.state.records = WC.state.records.filter(function (r) { return r.id !== id; });
+    localUpdates += 1;
+    render();
+  }
+  let localUpdates = 0;   // 回測用：本地更新次數
 
   function setMonth(m) {
     WC.state.month = m;
@@ -181,7 +219,8 @@ WC.app = (function () {
     });
   }
 
-  return { start: start, reload: reload, render: render, afterSave: afterSave, reloadCount: function () { return reloadCount; } };
+  return { start: start, reload: function () { return reload(); }, render: render, afterSave: afterSave, afterDelete: afterDelete,
+    reloadCount: function () { return reloadCount; }, localUpdates: function () { return localUpdates; } };
 })();
 
 document.addEventListener('DOMContentLoaded', WC.app.start);

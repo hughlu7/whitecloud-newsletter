@@ -261,6 +261,14 @@ main { max-width: 1120px; margin: 0 auto; padding: 16px; }
 #editor .ph figcaption { font-size: .72rem; padding: .2em .4em; color: var(--muted); min-height: 1.6em; }
 .badge-new { background: var(--peach); color: #fff; border-radius: 6px; padding: 0 .3em; }
 .badge-cover { background: var(--sky-deep); color: #fff; border-radius: 6px; padding: 0 .3em; }
+/* v2.4 F1：背景上傳狀態 */
+.badge-new.up-run { background: var(--sky-deep); }
+.badge-new.up-done { background: var(--ok); }
+.badge-new.up-err { background: var(--danger); }
+#editor .ph .ph-err { color: var(--danger); font-weight: 700; }
+#editor .ph .ph-retry { display: block; width: calc(100% - 8px); margin: 0 4px 4px; min-height: 44px; border: 1px solid var(--danger); border-radius: 10px;
+  background: #fff; color: var(--danger); font-weight: 700; cursor: pointer; }
+#editor .ph .ph-retry:disabled { opacity: .45; }
 .ph-tools { position: absolute; top: 4px; right: 4px; left: 4px; display: flex; gap: 4px; justify-content: flex-end; }
 .ph-tools button { min-width: 44px; min-height: 44px; border: 0; border-radius: 10px; background: rgba(255, 255, 255, .92); cursor: pointer; font-size: .95rem; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
 .ph-tools .ph-remove { color: var(--danger); margin-left: auto; }
@@ -522,3 +530,6 @@ body.viewer-open { overflow: hidden; }
 .ai-cand-btn.on { background: var(--sky-deep); color: #fff; border-color: var(--sky-deep); }
 .ai-cand.done span::after { content: ' ✓'; color: var(--ok); }
 .ai-roster-note { flex: 1 1 100%; margin: 0; color: #8a4a1a; font-weight: 700; font-size: .88rem; }
+
+/* v2.4：頁面最下方的版本 */
+.app-version { text-align: center; color: var(--muted); font-size: .75rem; margin: 1.5em 0 5.5em; }

@@ -72,6 +72,15 @@ WC.util = (function () {
     schedule();
   }
 
+  /** 收掉畫面上的提示（type 省略＝全部）；問題解決後用，避免舊的錯誤訊息留在畫面上 */
+  function clearToasts(type) {
+    const box = $('#toast');
+    if (!box) return;
+    Array.prototype.slice.call(box.children).forEach(function (el) {
+      if (!type || el.classList.contains('toast-' + type)) el.remove();
+    });
+  }
+
   /** 把任意錯誤轉成使用者看得懂的一句話 */
   function errMsg(err) {
     if (!err) return '發生未知錯誤';
@@ -114,6 +123,6 @@ WC.util = (function () {
   return {
     clampChars: clampChars, charLen: charLen, bindCharLimits: bindCharLimits,
     esc: esc, $: $, $all: $all, todayStr: todayStr, currentMonth: currentMonth, shiftMonth: shiftMonth,
-    monthLabel: monthLabel, dateLabel: dateLabel, fmtBytes: fmtBytes, toast: toast, errMsg: errMsg
+    monthLabel: monthLabel, dateLabel: dateLabel, fmtBytes: fmtBytes, toast: toast, clearToasts: clearToasts, errMsg: errMsg
   };
 })();

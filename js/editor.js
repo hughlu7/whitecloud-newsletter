@@ -9,8 +9,11 @@
  *   - 摘要、家訊文案收在「進階」（預設收合）；第 1 階段不顯示 AI 按鈕。
  *   - 鍵盤：Tab 依畫面順序；Ctrl（⌘）+Enter 送出；單行輸入框 Enter 不送出；Esc 關閉。可把照片拖進視窗。
  *
- * 照片流程（沿用 v1.5）：選檔 → 立即在瀏覽器壓縮並預覽（尚未上傳）→ 送出／存草稿時才逐張上傳，
- * 全部上傳成功後才寫入紀錄。取消不會在 Drive 留下孤兒檔；照片放進「最終活動日期」的月份資料夾。
+ * 照片流程（v2.4 F1）：選檔 → 在瀏覽器壓縮並預覽 → 立刻在背景上傳（同時最多 2 張）。
+ * 送出／存草稿時只等「還沒傳完」的照片；上傳失敗的照片標示「上傳失敗」，可按「重試」或移除（送出時也會自動再試一次）。
+ * 只有每一張新照片都上傳成功（有檔案 ID）才寫入紀錄，任何一張沒完成就不送出（不會只送一部分）。
+ * 取消或關閉視窗時不刪 Drive 檔，交給後端每週清理（建立超過 72 小時、未屬於任何紀錄的檔案）。
+ * 照片放進「上傳當時活動日期」的月份資料夾；之後改日期，照片不搬資料夾（資料夾只是存放位置，不影響權限與顯示）。
  *
  * 開啟序號 session（H1）：每次 open／close 都遞增。非同步工作（壓縮、上傳）每做完一步都比對序號，
  * 不同代表視窗已關閉或換了另一筆紀錄，結果直接丟棄，不會跑進別筆紀錄。
@@ -21,13 +24,17 @@ WC.editor = (function () {
   const FINAL = ['已採用', '不採用'];
   const STEP_MQ = window.matchMedia('(max-width: 759px)');
   let current = null;     // 編輯中的原始紀錄（新增時為 null）
-  let photos = [];        // [{ key, kind:'saved'|'pending', photo?, previewUrl, b64?, thumbB64?, w, h, note, meta }]
+  let photos = [];        // [{ key, kind:'saved'|'pending', photo?, previewUrl, b64?, thumbB64?, w, h, note, meta, up?, upErr? }]
+                          //   pending 的 up：'wait' 排隊、'run' 上傳中、'done' 已上傳（photo 有檔案 ID）、'err' 失敗
                           //   note：畫面上的小字（壓縮資訊）；meta：要存進照片JSON 的選填欄位 { caption, note, fx, fy }（v2.0）
   const META_LIMITS = { caption: 40, note: 100 };
   let readOnly = false;
   let dirty = false;
   let busy = false;       // 儲存／刪除進行中
   let compressing = 0;    // 壓縮中的張數
+  const UPLOAD_PARALLEL = 2;
+  let uploading = 0;      // 這個 session 進行中的上傳數
+  let uploadWaiters = []; // 等「沒有排隊／上傳中的照片」的 resolve
   let session = 0;
   let keySeq = 0;
   let lastRemoved = null; // { item, index }：供「復原」用
@@ -148,7 +155,7 @@ WC.editor = (function () {
         '<label class="field"><span>第 ' + (i + 1) + ' 張圖說 <small class="counter" data-meta-count="caption"></small></span>' +
         '<input data-meta="caption" data-maxchars="' + META_LIMITS.caption + '" placeholder="相簿版印在照片下方（可不填）" value="' + U.esc(m.caption || '') + '"' + (readOnly ? ' disabled' : '') + '></label>' +
         '<label class="field"><span>備註（不印出） <small class="counter" data-meta-count="note"></small></span>' +
-        '<input data-meta="note" data-maxchars="' + META_LIMITS.note + '" placeholder="例如：右邊穿黃衣服的是 [[王小明]]" value="' + U.esc(m.note || '') + '"' + (readOnly ? ' disabled' : '') + '></label>' +
+        '<input data-meta="note" data-maxchars="' + META_LIMITS.note + '" placeholder="例如：右邊穿黃衣服的是小明" value="' + U.esc(m.note || '') + '"' + (readOnly ? ' disabled' : '') + '></label>' +
         '</div></li>';
     }).join('');
     U.$all('.pm', box).forEach(updateMetaCounters);
@@ -202,9 +209,11 @@ WC.editor = (function () {
 
   /** 開啟視窗；rec 省略＝新增 */
   function open(rec) {
+    U.clearToasts('error');
     const cfg = WC.state.config;
     session += 1;
     compressing = 0;
+    resetUploads();
     current = rec || null;
     // 照片資料損壞的紀錄一律唯讀：後端會拒絕存檔，避免把照片清單覆蓋成空的
     readOnly = !!(rec && (!rec.canEdit || rec.photosBroken));
@@ -299,6 +308,8 @@ WC.editor = (function () {
     U.$('#leave-ask-title').textContent = current ? '修改還沒儲存，要怎麼處理？' : '還沒送出，要怎麼處理？';
     U.$('#leave-ask-note').textContent = compressing
       ? '照片還在壓縮（' + compressing + ' 張），完成後才能儲存；選「放棄」會直接丟掉。'
+      : uploadsBusy()
+        ? '照片還在上傳，按「' + keepLabel + '」會等上傳完成再存；選「放棄」會直接丟掉。'
       : current && current.status !== '草稿'
         ? '「儲存修改」會保留目前狀態（' + WC.records.label(current.status) + '）。'
         : '草稿不會給主編挑選；之後可以從首頁的卡片按「繼續」完成送出。';
@@ -315,8 +326,9 @@ WC.editor = (function () {
   function close(force) {
     if (busy) return;
     if (!force) { requestClose(); return; }
-    session += 1;        // 讓進行中的壓縮結果作廢
+    session += 1;        // 讓進行中的壓縮、上傳結果作廢（已傳到 Drive 的檔案由後端孤兒清理處理）
     compressing = 0;
+    resetUploads();
     WC.speech.stop();
     photos.forEach(revokePreview);
     if (lastRemoved) revokePreview(lastRemoved.item);
@@ -361,18 +373,18 @@ WC.editor = (function () {
   function renderPhotos() {
     const max = WC.state.config.maxPhotos;
     const grid = U.$('#photo-grid');
+    const dis = busy ? ' disabled' : '';   // 儲存中重畫（例如背景上傳完成）時，照片工具保持停用
     grid.innerHTML = photos.map(function (p, i) {
       const img = p.kind === 'saved'
         ? '<img data-photo-id="' + U.esc(p.photo.thumbId) + '" alt="">'
         : '<img src="' + U.esc(p.previewUrl) + '" alt="">';
       return '<figure class="ph" data-key="' + p.key + '">' +
-        '<button type="button" class="ph-view" data-ph="view" aria-label="放大看第 ' + (i + 1) + ' 張' + (p.kind === 'pending' ? '（待上傳）' : '') + '照片">' + img + '</button>' +
-        '<figcaption>' + (i === 0 ? '<span class="badge-cover">封面</span> ' : '') +
-        (p.kind === 'pending' ? '<span class="badge-new">待上傳</span> ' : '') + U.esc(p.note) + '</figcaption>' +
+        '<button type="button" class="ph-view" data-ph="view" aria-label="放大看第 ' + (i + 1) + ' 張' + (p.kind === 'pending' ? '（' + UPLOAD_LABEL[p.up || 'wait'] + '）' : '') + '照片">' + img + '</button>' +
+        '<figcaption>' + captionHtml(p, i) + '</figcaption>' + retryHtml(p, i) +
         (readOnly ? '' : '<div class="ph-tools">' +
-          '<button type="button" data-ph="left" aria-label="第 ' + (i + 1) + ' 張往前移"' + (i === 0 ? ' disabled' : '') + '>◀</button>' +
-          '<button type="button" data-ph="right" aria-label="第 ' + (i + 1) + ' 張往後移"' + (i === photos.length - 1 ? ' disabled' : '') + '>▶</button>' +
-          '<button type="button" data-ph="remove" class="ph-remove" aria-label="移除第 ' + (i + 1) + ' 張照片">✕</button></div>') +
+          '<button type="button" data-ph="left" aria-label="第 ' + (i + 1) + ' 張往前移"' + (i === 0 || busy ? ' disabled' : '') + '>◀</button>' +
+          '<button type="button" data-ph="right" aria-label="第 ' + (i + 1) + ' 張往後移"' + (i === photos.length - 1 || busy ? ' disabled' : '') + '>▶</button>' +
+          '<button type="button" data-ph="remove" class="ph-remove" aria-label="移除第 ' + (i + 1) + ' 張照片"' + dis + '>✕</button></div>') +
         '</figure>';
     }).join('');
     const n = photos.length + compressing;
@@ -420,15 +432,137 @@ WC.editor = (function () {
         photos.push({
           key: 'k' + (++keySeq), kind: 'pending', previewUrl: c.previewUrl, b64: c.fullB64, thumbB64: c.thumbB64,
           w: c.w, h: c.h, note: U.fmtBytes(c.originalBytes) + ' → ' + U.fmtBytes(c.compressedBytes) + '（' + c.w + '×' + c.h + '）',
-          meta: {}
+          meta: {}, up: 'wait', upErr: ''
         });
       }
+      pumpUploads();   // v2.4 F1：壓縮好一張就排進背景上傳
       renderPhotos();
       updateFooter();
       updateSaveState();
       if (!U.$('#leave-ask').hidden) showLeaveAsk(); // 詢問畫面開著時，壓縮完成就讓「存成草稿」可按
     }
     status.textContent = '';
+    updateUploadStatus();
+  }
+
+  // ---------- 背景上傳（v2.4 F1） ----------
+
+  function captionHtml(p, i) {
+    return (i === 0 ? '<span class="badge-cover">封面</span> ' : '') + uploadBadge(p) +
+      (p.up === 'err' ? '<span class="ph-err">' + U.esc(p.upErr || '上傳失敗') + '</span> ' : '') + U.esc(p.note);
+  }
+
+  function retryHtml(p, i) {
+    return p.kind === 'pending' && p.up === 'err'
+      ? '<button type="button" data-ph="retry" class="ph-retry" aria-label="重新上傳第 ' + (i + 1) + ' 張照片"' + (busy ? ' disabled' : '') + '>重試</button>' : '';
+  }
+
+  /**
+   * 只更新一張照片的狀態文字與「重試」鈕，不重畫整個照片區：
+   * 老師正在打圖說或備註時，背景上傳完成不會讓輸入框失去焦點。
+   */
+  function patchPhoto(p) {
+    const i = photos.indexOf(p);
+    const fig = i < 0 ? null : U.$('#photo-grid .ph[data-key="' + p.key + '"]');
+    if (!fig) return;
+    const cap = fig.querySelector('figcaption');
+    cap.innerHTML = captionHtml(p, i);
+    const old = fig.querySelector('[data-ph="retry"]');
+    const html = retryHtml(p, i);
+    if (old && !html) old.remove();
+    if (!old && html) cap.insertAdjacentHTML('afterend', html);
+    const view = fig.querySelector('[data-ph="view"]');
+    if (view) view.setAttribute('aria-label', '放大看第 ' + (i + 1) + ' 張（' + UPLOAD_LABEL[p.up || 'wait'] + '）照片');
+  }
+
+  const UPLOAD_LABEL = { wait: '待上傳', run: '上傳中…', done: '已上傳', err: '上傳失敗' };
+
+  function uploadBadge(p) {
+    if (p.kind !== 'pending') return '';
+    const st = p.up || 'wait';
+    return '<span class="badge-new up-' + st + '">' + UPLOAD_LABEL[st] + '</span> ';
+  }
+
+  /** 照片放進哪個月份資料夾：目前的活動日期（格式不對時用目前月份） */
+  function uploadMonth() {
+    const d = field('date').value;
+    return /^\d{4}-(0[1-9]|1[0-2])-\d{2}$/.test(d) ? d.slice(0, 7) : WC.state.month;
+  }
+
+  /** 是否還有排隊中或上傳中的照片（只看目前視窗裡的照片；被移除的不算） */
+  function uploadsBusy() {
+    return photos.some(function (p) { return p.kind === 'pending' && ((p.up === 'wait' && p.b64) || p.up === 'run'); });
+  }
+
+  /** 開關視窗時：作廢這個 session 的上傳計數，叫醒還在等的人（等的人會比對 session 後放棄） */
+  function resetUploads() {
+    uploading = 0;
+    const w = uploadWaiters; uploadWaiters = [];
+    w.forEach(function (r) { r(); });
+  }
+
+  function waitUploads() {
+    if (!uploadsBusy()) return Promise.resolve();
+    return new Promise(function (resolve) { uploadWaiters.push(resolve); });
+  }
+
+  function checkUploadsIdle() {
+    if (uploadsBusy()) return;
+    const w = uploadWaiters; uploadWaiters = [];
+    w.forEach(function (r) { r(); });
+  }
+
+  /** 從排隊中的照片依畫面順序開始上傳，同時最多 UPLOAD_PARALLEL 張 */
+  function pumpUploads() {
+    if (readOnly) return;
+    while (uploading < UPLOAD_PARALLEL) {
+      const next = photos.find(function (p) { return p.kind === 'pending' && p.up === 'wait' && p.b64; });
+      if (!next) break;
+      startUpload(next);
+    }
+    updateUploadStatus();
+    checkUploadsIdle();
+  }
+
+  async function startUpload(p) {
+    const mySession = session;
+    p.up = 'run'; p.upErr = '';
+    uploading += 1;
+    patchPhoto(p);
+    let res = null, err = null;
+    try {
+      res = await WC.api.uploadPhoto(uploadMonth(), p.b64, p.thumbB64, p.w, p.h);
+    } catch (e) { err = e; }
+    if (mySession !== session) return; // 視窗已關閉或換了紀錄：結果丟棄，不會進到別筆紀錄
+    uploading -= 1;
+    if (res && res.photo && res.photo.id && res.photo.thumbId) {
+      p.photo = res.photo; p.up = 'done';
+    } else {
+      p.up = 'err';
+      p.upErr = err ? U.errMsg(err) : '上傳失敗';
+    }
+    patchPhoto(p);
+    pumpUploads();
+  }
+
+  /** 「上傳照片 x / n」：x＝已完成、n＝這次加入的新照片數 */
+  function uploadProgress() {
+    const pend = photos.filter(function (p) { return p.kind === 'pending'; });
+    const done = pend.filter(function (p) { return p.up === 'done'; }).length;
+    const errs = pend.filter(function (p) { return p.up === 'err'; }).length;
+    return { n: pend.length, done: done, errs: errs };
+  }
+
+  function updateUploadStatus() {
+    if (compressing > 0) return; // 壓縮中的文字由 onFilesPicked 顯示
+    const g = uploadProgress();
+    const status = U.$('#photo-status');
+    if (!g.n || (g.done === g.n)) { status.textContent = g.n ? '照片都已上傳（' + g.n + ' 張）' : ''; }
+    else {
+      status.textContent = '上傳照片 ' + g.done + ' / ' + g.n +
+        (g.errs ? '（' + g.errs + ' 張失敗，請按照片上的「重試」或移除）' : '（可以先繼續填寫）');
+    }
+    if (busy && uploadsBusy()) U.$('#btn-save').textContent = '上傳照片 ' + g.done + ' / ' + g.n + '…';
   }
 
   function onPhotoTool(e) {
@@ -438,6 +572,13 @@ WC.editor = (function () {
     const i = photos.findIndex(function (p) { return p.key === key; });
     if (i < 0) return;
     const act = b.getAttribute('data-ph');
+    if (act === 'retry') {
+      const p = photos[i];
+      if (p.kind === 'pending' && p.up === 'err') { p.up = 'wait'; p.upErr = ''; patchPhoto(p); pumpUploads(); }
+      const again = U.$('.ph[data-key="' + key + '"] [data-ph="view"]');
+      if (again) again.focus();
+      return;
+    }
     if (act === 'view') {
       // 待上傳的照片用本機預覽圖；已存的用原圖。只讀，不改動 photos 陣列與排序
       const list = photos.map(function (p) {
@@ -460,6 +601,7 @@ WC.editor = (function () {
     dirty = true;
     renderPhotos();
     updateFooter();
+    pumpUploads();   // 移除上傳中／排隊的照片後，更新進度與等待狀態
     // 鍵盤操作後焦點留在同一張照片的同一顆按鈕（或復原鈕）
     const sameKey = act === 'remove' ? null : U.$('.ph[data-key="' + key + '"] [data-ph="' + act + '"]');
     if (sameKey && !sameKey.disabled) sameKey.focus();
@@ -474,6 +616,7 @@ WC.editor = (function () {
     U.$('#photo-undo').hidden = true;
     renderPhotos();
     updateFooter();
+    pumpUploads();   // 復原的照片若還沒上傳完，繼續排隊
   }
 
   // ---------- 拖放照片 ----------
@@ -649,34 +792,50 @@ WC.editor = (function () {
     WC.speech.stop();
     const mySession = session;
     const data = collect(mode);
-    const month = data.date.slice(0, 7);
     let saved = null;
     U.$('#leave-ask').hidden = true;
     setBusy(true);
     try {
-      // 1. 逐張上傳待上傳照片（失敗就停；已上傳的改成 saved，重按不會重傳）
-      const pending = photos.filter(function (p) { return p.kind === 'pending' && p.b64; });
-      for (let i = 0; i < pending.length; i++) {
-        const p = pending[i];
-        setBusy(true, '上傳照片 ' + (i + 1) + ' / ' + pending.length + '…');
-        const res = await WC.api.uploadPhoto(month, p.b64, p.thumbB64, p.w, p.h);
+      // 1. 背景上傳（v2.4 F1）：失敗的照片自動再試一次，然後只等還沒傳完的照片
+      photos.forEach(function (p) { if (p.kind === 'pending' && p.up === 'err') { p.up = 'wait'; p.upErr = ''; } });
+      pumpUploads();
+      if (uploadsBusy()) {
+        const g = uploadProgress();
+        setBusy(true, '上傳照片 ' + g.done + ' / ' + g.n + '…');
+        await waitUploads();
         if (mySession !== session) return; // finally 會解除 busy
-        WC.photos.prime(res.photo.thumbId, p.previewUrl);
-        p.kind = 'saved'; p.photo = res.photo; p.b64 = null; p.thumbB64 = null;
       }
-      // 2. 寫紀錄（防呆：只送已有檔案 ID 的照片）
+      // 2. 防呆：每一張新照片都要上傳成功（有原圖與縮圖 ID）才寫紀錄；有任何一張沒完成就不送出
+      const notReady = photos.filter(function (p) {
+        return !(p.photo && p.photo.id && p.photo.thumbId) || (p.kind === 'pending' && p.up !== 'done');
+      });
+      if (notReady.length) {
+        const e = new Error('有 ' + notReady.length + ' 張照片上傳失敗，請按照片上的「重試」，或把它移除後再送出。');
+        e.code = 'UPLOAD_INCOMPLETE';
+        throw e;
+      }
+      // 3. 寫紀錄
       setBusy(true, '儲存紀錄…');
-      data.photos = photos.filter(function (p) { return p.photo && p.photo.id; }).map(function (p) { return withMeta(p.photo, p.meta); });
+      data.photos = photos.map(function (p) { return withMeta(p.photo, p.meta); });
       saved = (await WC.api.saveRecord(data, current ? current.updatedAt : '')).record;
+      if (mySession === session) {
+        // 存檔成功：新照片的縮圖直接用本機預覽（不必再向後端下載），改成「已存」以免關閉視窗時被釋放
+        photos.forEach(function (p) {
+          if (p.kind !== 'pending') return;
+          WC.photos.prime(p.photo.thumbId, p.previewUrl);
+          p.kind = 'saved'; p.b64 = null; p.thumbB64 = null;
+        });
+      }
     } catch (err) {
       if (mySession === session) U.toast('儲存失敗：' + saveErrorMessage(err), 'error');
     } finally {
       setBusy(false);
     }
     if (saved && mySession === session) {
+      U.clearToasts('error');   // 先前的「儲存失敗」已解決，收掉
       const verb = saved.status === '草稿' ? '已存成草稿' : saved.status === '已確認' && (!current || current.status === '草稿') ? '已送出' : '已儲存';
       U.toast(verb + '「' + saved.title + '」' + (noUnit ? '（未選單元，先放在「' + saved.unit + '」）' : ''), 'ok');
-      // v2.1：要給家長看的文字有代號、待補充或隱私字眼時，存檔後提醒（不擋；列印前確認框也會再列出）
+      // v2.1：要給家長看的文字有待補充或隱私字眼時，存檔後提醒（不擋；列印前確認框也會再列出）
       const issues = WC.printcheck.checkRecord(saved);
       if (issues.length) U.toast('提醒：這筆的家訊內容有 ' + issues.length + ' 處要處理後才適合印給家長——' + WC.printcheck.summary(issues), 'error');
       close(true);
@@ -699,8 +858,9 @@ WC.editor = (function () {
     }
     if (ok) {
       U.toast('已刪除', 'ok');
+      const id = current.id;
       close(true);
-      await WC.app.reload();
+      await WC.app.afterDelete(id);
     }
   }
 
@@ -806,24 +966,12 @@ WC.editor = (function () {
     updateAdvPreview();
   }
 
-  /** v2.1：把原始紀錄中第一個還沒標記的「text」換成 [[name]]（老師點選候選學生後） */
-  function aiMarkName(text, name) {
-    const t = field('rawText');
-    const v = t.value;
-    // 跳過已在 [[…]] 裡的出現位置
-    let i = -1, from = 0;
-    while ((i = v.indexOf(text, from)) >= 0) {
-      const before = v.lastIndexOf('[[', i), closeBefore = v.lastIndexOf(']]', i);
-      if (before > closeBefore) { from = i + text.length; continue; }
-      break;
-    }
-    if (i < 0) return false;
-    t.value = v.slice(0, i) + '[[' + name + ']]' + v.slice(i + text.length);
-    t.dispatchEvent(new Event('input', { bubbles: true }));
-    return true;
-  }
-
   function aiCanUse() { return !readOnly && !busy && compressing === 0 && !!field('rawText').value.trim(); }
 
-  return { open: open, close: close, bind: bind, aiInput: aiInput, aiHasContent: aiHasContent, aiApply: aiApply, aiCanUse: aiCanUse, aiMarkName: aiMarkName };
+  /** 回測用：目前視窗內照片的上傳狀態（不含照片內容） */
+  function _uploadState() {
+    return { uploading: uploading, busy: busy, photos: photos.map(function (p) { return { kind: p.kind, up: p.up || '', id: p.photo ? p.photo.id : '' }; }) };
+  }
+
+  return { _uploadState: _uploadState, open: open, close: close, bind: bind, aiInput: aiInput, aiHasContent: aiHasContent, aiApply: aiApply, aiCanUse: aiCanUse };
 })();
