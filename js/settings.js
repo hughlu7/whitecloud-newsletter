@@ -24,7 +24,9 @@ WC.settings = (function () {
   function $s(sel) { return U.$('#panel-settings ' + sel); }
   /** 以單元名稱為鍵的物件一律用 hasOwnProperty 取值（名稱可能是 constructor、toString、__proto__） */
   function countOf(counts, name) { return counts && Object.prototype.hasOwnProperty.call(counts, name) ? Number(counts[name]) || 0 : 0; }
-  const UNIT_BAD_CHARS_RE = /[\u0000-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069\u2028\u2029\u115F\u1160\u3164\uFFA0\u2800]/;
+  const UNIT_BAD_CHARS_RE = /[\u0000-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069\u2028\u2029\u115F\u1160\u3164\uFFA0\u2800\u180E]/;
+  const UNIT_HAS_LETTER_RE = /[\p{L}\p{N}]/u;                       // v2.6（G3）：至少一個字母或數字
+  const UNIT_RESERVED = ['__proto__', 'constructor', 'prototype'];   // v2.6（G3）：保留字
   const CTRL_BIDI_RE = /[\u0000-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069\u2028\u2029]/;
 
   function fromServer(res) {
@@ -33,6 +35,8 @@ WC.settings = (function () {
     draft = {
       units: res.config.units.map(function (u) { return { key: newKey(), name: u, from: u, count: countOf(counts, u) }; }),
       removed: [],
+      // v2.6（G2）：紀錄表有、單元清單沒有的單元（action：''＝還沒處理、'move'＝搬到 moveToKey、'add'＝加回清單）
+      orphans: (res.orphans || []).map(function (o) { return { name: o.name, count: Number(o.count) || 0, action: '', moveToKey: '', unitKey: '' }; }),
       info: {
         className: res.config.className || '', newsletterName: res.config.newsletterName || '', footer: res.config.footer || '',
         emptyText: res.config.emptyText || '', maxPhotos: res.config.maxPhotos
@@ -43,7 +47,8 @@ WC.settings = (function () {
 
   /** 這個單元刪除時要搬的紀錄數：自己的紀錄＋已刪單元選擇搬進來的 */
   function carried(u) {
-    return u.count + draft.removed.reduce(function (n, r) { return n + (r.moveToKey === u.key ? r.count : 0); }, 0);
+    return u.count + draft.removed.reduce(function (n, r) { return n + (r.moveToKey === u.key ? r.count : 0); }, 0) +
+      draft.orphans.reduce(function (n, o) { return n + (o.action === 'move' && o.moveToKey === u.key ? o.count : 0); }, 0);
   }
   function unitByKey(k) { return draft.units.find(function (u) { return u.key === k; }); }
 
@@ -53,12 +58,17 @@ WC.settings = (function () {
     const out = [];
     const cfg = server.config;
     draft.units.forEach(function (u) {
-      if (!u.from) out.push({ kind: 'add', text: '新增單元「' + u.name + '」' });
+      if (u.orphan) out.push({ kind: 'add', text: '把「' + u.name + '」加回清單（' + u.count + ' 筆紀錄）' });
+      else if (!u.from) out.push({ kind: 'add', text: '新增單元「' + u.name + '」' });
       else if (u.from !== u.name) out.push({ kind: 'rename', records: u.count, text: '「' + u.from + '」改名為「' + u.name + '」' + (u.count ? '（' + u.count + ' 筆紀錄一起改）' : '（沒有紀錄）') });
     });
     draft.removed.forEach(function (r) {
       const to = r.moveToKey ? unitByKey(r.moveToKey) : null;
       out.push({ kind: 'remove', records: r.count, text: '刪除單元「' + r.name + '」' + (to && r.count ? '（' + r.count + ' 筆紀錄移到「' + to.name + '」）' : '（沒有紀錄）') });
+    });
+    draft.orphans.forEach(function (o) {
+      const to = o.action === 'move' ? unitByKey(o.moveToKey) : null;
+      if (to) out.push({ kind: 'remove', records: o.count, text: '不在清單內的「' + o.name + '」：' + o.count + ' 筆紀錄移到「' + to.name + '」' });
     });
     const keptOrder = draft.units.filter(function (u) { return u.from; }).map(function (u) { return u.from; });
     const oldOrder = cfg.units.filter(function (u) { return keptOrder.indexOf(u) >= 0; });
@@ -79,6 +89,8 @@ WC.settings = (function () {
     if (!name) return '單元名稱不可空白';
     if (/[,，、]/.test(name)) return '單元名稱不能有逗號或頓號';
     if (UNIT_BAD_CHARS_RE.test(name)) return '單元名稱不可換行，也不可含控制字元或看不見的特殊字元';
+    if (!UNIT_HAS_LETTER_RE.test(name)) return '單元名稱至少要有一個中文字、英文字母或數字';
+    if (UNIT_RESERVED.indexOf(name) >= 0) return '「' + name + '」是系統保留字，請換一個名稱';
     if (U.charLen(name) > L.unitName) return '單元名稱最多 ' + L.unitName + ' 字（目前 ' + U.charLen(name) + ' 字），請刪減';
     if (draft.units.some(function (u) { return u.key !== exceptKey && u.name === name; })) return '已經有「' + name + '」這個單元';
     if (draft.removed.some(function (r) { return r.name === name; })) return '「' + name + '」是這次要刪除的單元，請先儲存刪除，或換一個名稱';
@@ -103,10 +115,11 @@ WC.settings = (function () {
     const L = lim();
     const name = U.esc(u.name);
     const meta = [];
-    if (!u.from) meta.push('<span class="set-badge new">新增</span>');
+    if (u.orphan) meta.push('<span class="set-badge new">加回清單</span>');
+    else if (!u.from) meta.push('<span class="set-badge new">新增</span>');
     else if (u.from !== u.name) meta.push('<span class="set-badge">原名：' + U.esc(u.from) + '</span>');
     const c = carried(u);
-    meta.push('<span class="muted">' + (u.from ? c + ' 筆紀錄' : c ? c + ' 筆紀錄（搬入）' : '尚無紀錄') + '</span>');
+    meta.push('<span class="muted">' + (u.from || u.orphan ? c + ' 筆紀錄' : c ? c + ' 筆紀錄（搬入）' : '尚無紀錄') + '</span>');
     if (editingKey === u.key) {
       return '<li class="set-unit editing" data-key="' + u.key + '">' +
         '<span class="set-no" aria-hidden="true">' + (i + 1) + '</span>' +
@@ -122,7 +135,7 @@ WC.settings = (function () {
       '<div class="set-tools">' +
       '<button type="button" class="btn-sm" data-act="up" aria-label="把「' + name + '」往前移一頁"' + (i === 0 ? ' disabled' : '') + '>↑</button>' +
       '<button type="button" class="btn-sm" data-act="down" aria-label="把「' + name + '」往後移一頁"' + (i === n - 1 ? ' disabled' : '') + '>↓</button>' +
-      '<button type="button" class="btn-sm" data-act="rename" aria-label="把「' + name + '」改名">改名</button>' +
+      '<button type="button" class="btn-sm" data-act="rename" aria-label="把「' + name + '」改名"' + (u.orphan ? ' disabled title="先儲存加回清單，之後才能改名"' : '') + '>改名</button>' +
       '<button type="button" class="btn-sm btn-out" data-act="delete" aria-label="刪除「' + name + '」"' + (n <= L.unitsMin ? ' disabled' : '') + '>刪除</button>' +
       '</div></li>';
   }
@@ -141,6 +154,7 @@ WC.settings = (function () {
     const n = draft.units.length;
     $s('#set-units-count').textContent = '共 ' + n + ' 個單元＝家訊 ' + n + ' 頁';
     $s('#set-unit-list').innerHTML = draft.units.map(function (u, i) { return rowHtml(u, i, n); }).join('');
+    renderOrphans();
     $s('#set-min-note').hidden = n > L.unitsMin;
     $s('#set-min-note').textContent = '至少要保留 ' + L.unitsMin + ' 個單元，所以最後一個不能刪除。';
     updateNameCount($s('#set-unit-new'), $s('#set-unit-new-count'));
@@ -172,6 +186,58 @@ WC.settings = (function () {
       if (f.sel) el = $s(f.sel);
       if (el) el.focus();
     }
+  }
+
+  /** v2.6（G2）：不在清單內的單元（孤兒）警告區塊 */
+  function renderOrphans() {
+    const box = $s('#set-orphans');
+    if (!box) return;
+    const list = draft.orphans;
+    box.hidden = !list.length;
+    if (!list.length) { box.innerHTML = ''; return; }
+    const full = draft.units.length >= lim().unitsMax;
+    box.innerHTML = '<p class="set-orphan-h"><b>⚠ 有紀錄的單元不在清單中</b>（這些紀錄不會出現在家訊裡）。請把它們搬到某個單元，或把單元加回清單；按「儲存設定」後生效。</p>' +
+      '<ul class="set-orphan-list">' + list.map(function (o, i) {
+        const nm = U.esc(o.name);
+        let body;
+        if (o.action === 'move') {
+          const to = unitByKey(o.moveToKey);
+          body = '<span>將在儲存後移到「<b>' + U.esc(to ? to.name : '') + '</b>」。</span> <button type="button" class="btn-sm" data-act="orphan-undo" data-oi="' + i + '">取消</button>';
+        } else if (o.action === 'add') {
+          body = '<span>將在儲存後加回清單（最後一頁）。</span> <button type="button" class="btn-sm" data-act="orphan-undo" data-oi="' + i + '">取消</button>';
+        } else {
+          const bad = nameError(o.name, '');
+          body = '<label class="visually-hidden" for="set-orphan-to-' + i + '">「' + nm + '」的紀錄要移到哪個單元</label>' +
+            '<select id="set-orphan-to-' + i + '"><option value="">（選擇要移到的單元）</option>' +
+            draft.units.map(function (u) { return '<option value="' + u.key + '">' + U.esc(u.name) + '</option>'; }).join('') + '</select>' +
+            '<button type="button" class="btn-sm" data-act="orphan-move" data-oi="' + i + '">移過去</button>' +
+            '<button type="button" class="btn-sm" data-act="orphan-add" data-oi="' + i + '"' + (bad || full ? ' disabled' : '') + '>加回清單</button>' +
+            (bad ? '<small class="set-warn">這個名稱不能加回清單（' + U.esc(bad) + '），請移到其他單元。</small>' : full ? '<small class="set-warn">已達單元上限，只能移到其他單元。</small>' : '');
+        }
+        return '<li class="set-orphan" data-oi="' + i + '"><p>有 <b>' + o.count + '</b> 筆紀錄的單元「<b>' + nm + '</b>」不在清單中。</p><div class="set-orphan-tools">' + body + '</div></li>';
+      }).join('') + '</ul>';
+  }
+
+  function orphanAct(act, i) {
+    const o = draft.orphans[i];
+    if (!o) return;
+    if (act === 'orphan-move') {
+      const sel = $s('#set-orphan-to-' + i);
+      if (!sel.value) { unitErr('請先選擇「' + o.name + '」的紀錄要移到哪個單元'); sel.focus(); return; }
+      unitErr('');
+      o.action = 'move'; o.moveToKey = sel.value;
+    } else if (act === 'orphan-add') {
+      const err = nameError(o.name, '');
+      if (err || draft.units.length >= lim().unitsMax) return;
+      const u = { key: newKey(), name: o.name, from: '', count: o.count, orphan: true };
+      draft.units.push(u);
+      o.action = 'add'; o.unitKey = u.key;
+    } else if (act === 'orphan-undo') {
+      if (o.action === 'add') draft.units = draft.units.filter(function (u) { return u.key !== o.unitKey; });
+      o.action = ''; o.moveToKey = ''; o.unitKey = '';
+    }
+    focusAfter = { sel: '#set-orphans [data-oi="' + i + '"] button:not(:disabled)' };
+    render();
   }
 
   function renderMaxPhotosWarn() {
@@ -361,6 +427,12 @@ WC.settings = (function () {
     draft.units = others;
     // 原本要搬進這個單元的（已刪單元的紀錄）改搬到新的目標
     draft.removed.forEach(function (r) { if (r.moveToKey === key) r.moveToKey = toKey; });
+    // v2.6（G2）：要搬進這個單元的孤兒改搬到新目標（沒有目標就回到未處理）；刪掉的是「加回清單」的孤兒 → 回到未處理
+    draft.orphans.forEach(function (o) {
+      if (o.action === 'move' && o.moveToKey === key) { if (toKey) o.moveToKey = toKey; else { o.action = ''; o.moveToKey = ''; } }
+      // 複核 R4：刪掉的是「加回清單」的孤兒 → 改成「移到」刪除時選的單元（畫面與實際送出一致）
+      if (o.action === 'add' && o.unitKey === key) { o.unitKey = ''; if (toKey) { o.action = 'move'; o.moveToKey = toKey; } else { o.action = ''; o.moveToKey = ''; } }
+    });
     if (u.from) draft.removed.push({ key: key, name: u.from, count: u.count, moveToKey: toKey });
     if (editingKey === key) editingKey = '';
     focusAfter = { sel: '#set-unit-new' };
@@ -381,7 +453,8 @@ WC.settings = (function () {
       box.hidden = false;
       document.body.classList.add('modal-open');
       confirmState = { resolve: resolve, opener: o.opener || document.activeElement, beforeOk: o.beforeOk };
-      const f = o.focus ? U.$(o.focus) : go;
+      // 回測 Q4：危險操作（停用、改成老師、刪除）初始焦點放在「取消」，避免一按 Enter 就執行
+      const f = o.focus ? U.$(o.focus) : o.danger ? U.$('#set-confirm-cancel') : go;
       (f || go).focus();
     });
   }
@@ -439,6 +512,8 @@ WC.settings = (function () {
       settings: draft.info,
       units: draft.units.map(function (u) { return { name: u.name, from: u.from || '' }; }),
       removed: draft.removed.map(function (x) { const t = x.moveToKey ? unitByKey(x.moveToKey) : null; return { name: x.name, moveTo: t ? t.name : '' }; })
+        .concat(draft.orphans.filter(function (o) { return o.action === 'move' && unitByKey(o.moveToKey); })
+          .map(function (o) { return { name: o.name, moveTo: unitByKey(o.moveToKey).name }; }))
     };
     saving = true;
     showMsg('');
@@ -512,6 +587,7 @@ WC.settings = (function () {
       if (act === 'rename-ok') commitRename();
       if (act === 'rename-cancel') cancelRename();
       if (act === 'delete') askDelete(key, b);
+      if (/^orphan-/.test(act)) orphanAct(act, Number(b.getAttribute('data-oi')));
     });
     panel.addEventListener('keydown', function (e) {
       if (e.target.id === 'set-rename-input') {
@@ -566,6 +642,6 @@ WC.settings = (function () {
     });
   }
 
-  return { bind: bind, onShow: onShow, render: render, clear: clear, confirmDiscard: confirmDiscard, isDirty: function () { return !!draft && isDirty(); },
+  return { bind: bind, onShow: onShow, render: render, clear: clear, confirmDiscard: confirmDiscard, confirm: confirmDialog, isDirty: function () { return !!draft && isDirty(); },
     _draft: function () { return draft ? JSON.parse(JSON.stringify(draft)) : null; } };
 })();

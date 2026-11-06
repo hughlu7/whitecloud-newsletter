@@ -125,10 +125,32 @@ WC.auth = (function () {
 
   function hideLogin() { WC.util.$('#login').hidden = true; }
 
+  /** G5：關掉 Google 的自動選帳號（GIS 尚未載入時略過） */
+  function disableAuto() {
+    try { if (window.google && google.accounts && google.accounts.id) google.accounts.id.disableAutoSelect(); } catch (e) { /* 略過 */ }
+  }
+
+  /** v2.6（G5）：不是成員（NOT_MEMBER）時：清 token，並關掉自動選帳號，避免 auto_select 又選回同一個帳號 */
+  function forgetAccount() {
+    WC.api.setToken('');
+    forget();
+    disableAuto();
+  }
+
+  /** G5：「換一個帳號登入」：清除後顯示登入鈕（不會自動選回原帳號） */
+  function switchAccount() {
+    forgetAccount();
+    loadGis().then(function () { initGis(); disableAuto(); showLogin('請選擇已加入成員名單的 Google 帳號。'); }).catch(function (e) {
+      WC.util.$('#login').hidden = false;
+      WC.util.$('#login-msg').textContent = WC.util.errMsg(e);
+    });
+  }
+
   /** api.js 收到 BAD_TOKEN／NO_TOKEN 時呼叫 */
   function onTokenInvalid() {
     WC.api.setToken('');
     forget();
+    disableAuto();   // G5
     const msg = '登入已過期，請重新登入（尚未儲存的內容仍保留在視窗中）。';
     loadGis().then(function () { initGis(); showLogin(msg); }).catch(function (e) {
       WC.util.$('#login').hidden = false;
@@ -143,5 +165,5 @@ WC.auth = (function () {
     location.reload();
   }
 
-  return { init: init, onTokenInvalid: onTokenInvalid, signOut: signOut, showLogin: showLogin, forget: forget };
+  return { init: init, onTokenInvalid: onTokenInvalid, signOut: signOut, showLogin: showLogin, forget: forget, forgetAccount: forgetAccount, switchAccount: switchAccount };
 })();

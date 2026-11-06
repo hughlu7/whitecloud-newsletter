@@ -15,8 +15,27 @@ WC.api = (function () {
   const REQUEST_TIMEOUT_MS = 120000;
   function setToken(t) { idToken = t || ''; }
 
-  /** 送一個 action 到 GAS；失敗時丟出 Error（帶 code） */
+  // v2.6：只限主編的動作。收到 FORBIDDEN 代表「自己剛被改成老師」→ 重新讀一次身分，讓「⚙ 設定」分頁消失
+  const EDITOR_ONLY = { getSettings: 1, saveSettings: 1, listMembers: 1, saveMember: 1 };
+
+  /**
+   * 送一個 action 到 GAS；失敗時丟出 Error（帶 code）。
+   * v2.6：任何請求收到 NOT_MEMBER（被停用或移出成員名單）→ 清掉 token、顯示「無法使用」畫面（WC.app.onNotMember）；
+   *       主編限定動作收到 FORBIDDEN → WC.app.refreshRole() 重新讀身分。示範模式走同樣的處理。
+   */
   async function call(action, params) {
+    try {
+      return await rawCall(action, params);
+    } catch (e) {
+      if (e && e.code === 'NOT_MEMBER' && action !== 'bootstrap' && WC.app && WC.app.onNotMember) WC.app.onNotMember(e.message);
+      // 複核 R5：目前畫面上是主編時，任何 FORBIDDEN 都重讀身分（可能剛被改成老師）；老師的一般權限錯誤不必
+      const shownEditor = WC.state && WC.state.me && WC.state.me.role === '主編';
+      if (e && e.code === 'FORBIDDEN' && (EDITOR_ONLY[action] || shownEditor) && action !== 'bootstrap' && WC.app && WC.app.refreshRole) WC.app.refreshRole();
+      throw e;
+    }
+  }
+
+  async function rawCall(action, params) {
     if (isDemo) return WC.demo.handle(action, params || {});
     const sent = idToken;   // 這個請求用的 token（回來時若已換新 token，不要因舊 token 失效而登出）
     let res;
@@ -43,6 +62,8 @@ WC.api = (function () {
     }
     if (!body.ok) {
       const err = makeError(body.error && body.error.code, body.error && body.error.message);
+      // v2.6：錯誤附帶的欄位（例如 DUPLICATE_MEMBER 的 email、inactive；UNIT_HAS_RECORDS 的 unit、count）一併帶給畫面
+      Object.keys(body.error || {}).forEach(function (k) { if (k !== 'code' && k !== 'message' && k !== 'stack') err[k] = body.error[k]; });
       // v2.4：同時有好幾個請求（bootstrap＋listRecords、照片並行）都回 BAD_TOKEN 時，只處理一次
       if ((err.code === 'BAD_TOKEN' || err.code === 'NO_TOKEN') && sent === idToken) WC.auth.onTokenInvalid();
       throw err;
@@ -74,6 +95,9 @@ WC.api = (function () {
     aiDraft: function (record) { return call('aiDraft', { record: record }); },
     /** v2.5 主編設定：讀（含 configVersion、各單元紀錄數）與存（payload 見 settings.js） */
     getSettings: function () { return call('getSettings'); },
-    saveSettings: function (payload) { return call('saveSettings', payload); }
+    saveSettings: function (payload) { return call('saveSettings', payload); },
+    /** v2.6 主編管理成員：讀清單（含 membersVersion）與逐筆存（{ expectedVersion, op:'add'|'update', member }） */
+    listMembers: function () { return call('listMembers'); },
+    saveMember: function (payload) { return call('saveMember', payload); }
   };
 })();

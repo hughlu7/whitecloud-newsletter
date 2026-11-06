@@ -41,6 +41,7 @@ WC.editor = (function () {
   let step = 1;
   let layoutManual = '';  // '' = 自動建議；否則為使用者點選的版型
   let statusTouched = false; // 主編在進階改過狀態
+  let cancelSend = null;     // v2.6（G4）：等照片上傳時的「取消送出」
 
   function form() { return U.$('#editor-form'); }
   function field(name) { return form().elements[name]; }
@@ -497,6 +498,7 @@ WC.editor = (function () {
   /** 開關視窗時：作廢這個 session 的上傳計數，叫醒還在等的人（等的人會比對 session 後放棄） */
   function resetUploads() {
     uploading = 0;
+    photos.forEach(function (p) { p.counted = false; });
     const w = uploadWaiters; uploadWaiters = [];
     w.forEach(function (r) { r(); });
   }
@@ -524,25 +526,43 @@ WC.editor = (function () {
     checkUploadsIdle();
   }
 
+  /**
+   * v2.6（G4）：讓出這張照片佔的上傳名額。用每張照片的 counted 旗標確保只減一次
+   * （上傳中被移除時立刻讓出；之後結果回來、或被復原，都不會再減）。
+   */
+  function releaseSlot(p) {
+    if (!p.counted) return;
+    p.counted = false;
+    uploading = Math.max(0, uploading - 1);
+  }
+  function isShown(p) { return photos.indexOf(p) >= 0; }
+
   async function startUpload(p) {
     const mySession = session;
     p.up = 'run'; p.upErr = '';
     uploading += 1;
-    patchPhoto(p);
-    let res = null, err = null;
-    try {
-      res = await WC.api.uploadPhoto(uploadMonth(), p.b64, p.thumbB64, p.w, p.h);
-    } catch (e) { err = e; }
-    if (mySession !== session) return; // 視窗已關閉或換了紀錄：結果丟棄，不會進到別筆紀錄
-    uploading -= 1;
-    if (res && res.photo && res.photo.id && res.photo.thumbId) {
-      p.photo = res.photo; p.up = 'done';
-    } else {
-      p.up = 'err';
-      p.upErr = err ? U.errMsg(err) : '上傳失敗';
+    p.counted = true;
+    try {   // G4：uploading += 1 之後的所有程式都在 try/finally 內，任何例外都會讓出名額
+      patchPhoto(p);
+      let res = null, err = null;
+      try {
+        res = await WC.api.uploadPhoto(uploadMonth(), p.b64, p.thumbB64, p.w, p.h);
+      } catch (e) { err = e; }
+      if (mySession !== session) return; // 視窗已關閉或換了紀錄：結果丟棄，不會進到別筆紀錄
+      // 已被移除的照片：結果只記在這張照片上（畫面不畫）；若之後按「復原」，就直接是上傳完成／失敗的狀態
+      if (res && res.photo && res.photo.id && res.photo.thumbId) {
+        p.photo = res.photo; p.up = 'done';
+      } else {
+        p.up = 'err';
+        p.upErr = err ? U.errMsg(err) : '上傳失敗';
+      }
+      if (isShown(p)) patchPhoto(p);
+    } finally {
+      if (mySession === session) {
+        releaseSlot(p);
+        pumpUploads();
+      }
     }
-    patchPhoto(p);
-    pumpUploads();
   }
 
   /** 「上傳照片 x / n」：x＝已完成、n＝這次加入的新照片數 */
@@ -592,6 +612,7 @@ WC.editor = (function () {
     if (act === 'remove') {
       if (lastRemoved) revokePreview(lastRemoved.item);
       lastRemoved = { item: photos.splice(i, 1)[0], index: i };
+      releaseSlot(lastRemoved.item);   // G4：上傳中的照片被移除 → 名額立刻讓出，下一張馬上遞補（下面的 pumpUploads）
       U.$('#photo-undo').hidden = false;
     } else {
       const j = act === 'left' ? i - 1 : i + 1;
@@ -721,7 +742,8 @@ WC.editor = (function () {
   function saveErrorMessage(err) {
     const code = err && err.code;
     if (code === 'PHOTO_EXPIRED') return '有照片已過期，請把顯示灰色的照片移除後重新加入。';
-    if (code === 'PHOTO_TAKEN') return '有照片已屬於其他紀錄，請移除後重新加入。';
+    if (code === 'PHOTO_TAKEN') return '有照片已屬於其他紀錄，請移除後重新加入。如果剛剛按過送出（網路慢或逾時），請先重新整理，看看是否已經存好。';   // G6
+    if (code === 'UNIT_CHANGED') return '單元名稱剛被主編調整過，已更新單元選項；請重新選擇單元後再送出（已填的內容都還在）。';
     if (code === 'PHOTOS_BROKEN') return '照片資料損壞，請聯絡管理者。';
     if (code === 'PHOTO_NOT_YOURS') return '有照片是其他老師上傳、尚未存檔的，不能加入您的紀錄；請把它移除後，改用自己上傳的照片。';
     if (code === 'PHOTO_MISMATCH') return '有照片的原圖與縮圖不相符，請把它移除後重新加入。';
@@ -761,7 +783,9 @@ WC.editor = (function () {
       status: finalStatus(mode),
       unitConfirmed: !!unitValue(),     // v2.1：沒選單元就存草稿時記為未確認
       // v2.5：開啟時的單元。沒改單元而主編剛好改名／互換／搬移時，後端保留伺服器上的單元
-      unitAtOpen: current ? current.unit : undefined
+      unitAtOpen: current ? current.unit : undefined,
+      // v2.6（G1）：畫面上的設定版本。主編剛互換／位移改名、而我新增或改選了單元時，後端回 UNIT_CHANGED
+      configVersion: WC.state.configVersion || undefined
     };
   }
 
@@ -804,8 +828,16 @@ WC.editor = (function () {
       if (uploadsBusy()) {
         const g = uploadProgress();
         setBusy(true, '上傳照片 ' + g.done + ' / ' + g.n + '…');
-        await waitUploads();
+        // v2.6（G4）：等照片上傳時可以「取消送出」：回到可編輯狀態，照片繼續在背景上傳，內容保留
+        const cancelled = await new Promise(function (resolve) {
+          cancelSend = function () { resolve(true); };
+          waitUploads().then(function () { resolve(false); });
+          U.$('#btn-cancel-send').hidden = false;
+        });
+        cancelSend = null;
+        U.$('#btn-cancel-send').hidden = true;
         if (mySession !== session) return; // finally 會解除 busy
+        if (cancelled) { U.toast('已取消送出。照片會繼續在背景上傳，內容都還在；準備好再按「送出」。', 'info'); return; }
       }
       // 2. 防呆：每一張新照片都要上傳成功（有原圖與縮圖 ID）才寫紀錄；有任何一張沒完成就不送出
       const notReady = photos.filter(function (p) {
@@ -829,9 +861,21 @@ WC.editor = (function () {
         });
       }
     } catch (err) {
+      if (mySession === session && err && err.code === 'UNIT_CHANGED') {
+        // v2.6（G1）：重新讀設定、重畫單元選項（清掉選取，請老師重新選）；其他已填內容保留
+        try { await WC.app.refreshConfig(); } catch (e) { /* 讀不到就用舊清單，老師仍需重選 */ }
+        if (mySession === session) {
+          renderUnits('', false);
+          updateTitlePlaceholder();
+          if (STEP_MQ.matches) goStep(3);
+        }
+      }
       if (mySession === session) U.toast('儲存失敗：' + saveErrorMessage(err), 'error');
     } finally {
       setBusy(false);
+      if (mySession === session && U.$('#unit-options input') && !unitValue() && STEP_MQ && document.activeElement === document.body) {
+        const first = U.$('#unit-options input'); if (first) first.focus();
+      }
     }
     if (saved && mySession === session) {
       U.clearToasts('error');   // 先前的「儲存失敗」已解決，收掉
@@ -847,7 +891,13 @@ WC.editor = (function () {
 
   async function remove() {
     if (!current || busy) return;
-    if (!confirm('確定要刪除「' + current.title + '」嗎？照片也會一併移到 Drive 垃圾桶（30 天內可由管理者救回）。')) return;
+    // 回測 Q3：改用頁內確認視窗（沿用設定頁的確認元件），不用原生 confirm()
+    const okDel = await WC.settings.confirm({
+      title: '刪除紀錄',
+      html: '<p>確定要刪除「<b>' + U.esc(current.title) + '</b>」嗎？</p><p>照片也會一併移到雲端硬碟的垃圾桶（30 天內可由管理者救回）。</p>',
+      okText: '刪除', danger: true, opener: U.$('#btn-delete')
+    });
+    if (!okDel || !current || busy) return;
     let ok = false;
     setBusy(true, '刪除中…');
     try {
@@ -897,6 +947,11 @@ WC.editor = (function () {
     U.$('#btn-cancel').addEventListener('click', function () { requestClose(); });
     U.$('#editor-close').addEventListener('click', function () { requestClose(); });
     U.$('#btn-draft').addEventListener('click', function () { save('draft'); });
+    U.$('#btn-cancel-send').addEventListener('click', function () {
+      if (!cancelSend) return;
+      cancelSend();
+      setTimeout(function () { const b = U.$('#btn-save'); if (b && !b.disabled) b.focus(); }, 0);
+    });
     U.$('#btn-prev').addEventListener('click', function () { goStep(step - 1); });
     U.$('#btn-next').addEventListener('click', function () { goStep(step + 1); });
     U.$('.stepper').addEventListener('click', function (e) {
@@ -915,7 +970,7 @@ WC.editor = (function () {
     });
     U.$('#photo-grid').addEventListener('click', onPhotoTool);
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && !U.$('#editor').hidden && !WC.viewer.isOpen()) { e.preventDefault(); requestClose(); }
+      if (e.key === 'Escape' && !U.$('#editor').hidden && !WC.viewer.isOpen() && U.$('#set-confirm').hidden) { e.preventDefault(); requestClose(); }
     });
     // 旋轉平板或縮放視窗時，在逐步／並排間切換
     const onMq = function () { if (!U.$('#editor').hidden) applyStepMode(); };

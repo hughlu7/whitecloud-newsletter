@@ -3,7 +3,7 @@
  * 畫面程式讀寫這裡，改完呼叫 WC.app.render() 重畫。
  */
 /** 前端版本（v2.4 起顯示在頁面最下方；和後端 Code.gs 的 VERSION 一起改） */
-WC.VERSION = '2.5.0';
+WC.VERSION = '2.6.0';
 
 WC.state = {
   month: '',          // 'YYYY-MM'

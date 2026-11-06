@@ -602,3 +602,58 @@ body.viewer-open { overflow: hidden; }
 .set-min-note { color: #8a5a00; }
 .settings-note { margin: 0; font-size: .8rem; color: var(--muted); }
 .settings-msg:focus { outline: 3px solid var(--peach); outline-offset: 2px; }
+
+/* ===== v2.6 成員（只有主編；逐筆立即儲存） ===== */
+.fatal-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+.settings-intro-members { display: block; }
+.settings-intro .btn-link { min-height: 44px; padding: 0 .4em; font-size: inherit; }
+.members-card { margin-top: 6px; }
+.members-card h3:focus { outline: 3px solid var(--peach); outline-offset: 2px; }
+.mem-list { list-style: none; margin: .6em 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.mem-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 10px;
+  border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; background: #fbfdff; }
+.mem-row.off { background: #f3f5f7; }
+.mem-row.off .mem-info b { color: var(--muted); }
+.mem-row.dup { border-style: dashed; }
+.mem-info { min-width: 0; display: flex; flex-direction: column; }
+.mem-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.mem-info b { overflow-wrap: anywhere; }
+.mem-email { font-size: .82rem; color: var(--muted); overflow-wrap: anywhere; }
+.mem-note { grid-column: 1 / -1; margin: 0; font-size: .82rem; color: #8a5a00; }
+.mem-tools .btn-sm { min-width: 44px; padding: .2em .8em; white-space: nowrap; }
+.set-badge.me { background: var(--sky-deep); color: #fff; }
+.set-badge.role-ed { background: var(--cream); color: #8a6a1f; }
+.set-badge.role-t { background: var(--sky-soft); color: var(--sky-deep); }
+.set-badge.off { background: #e4e7ea; color: #55606b; }
+.mem-row .set-rename { grid-column: 1 / -1; }
+.mem-add { border-top: 1px dashed var(--line); margin-top: .8em; padding-top: .6em; }
+.mem-add h4 { margin: 0 0 .2em; font-size: .98rem; }
+.mem-add > .btn { margin-top: .6em; }
+.mem-role { border: 0; padding: 0; margin: 0; }
+.mem-role legend { padding: 0; margin-bottom: .25em; }
+.mem-role-opt { display: flex; align-items: flex-start; gap: .6em; min-height: 44px; padding: .45em .7em; border: 1px solid var(--line); border-radius: 10px;
+  background: #fff; cursor: pointer; font-weight: 400; margin-bottom: 6px; }
+/* 單選鈕本身蓋滿整個選項（點哪裡都能選、觸控目標＝整列），畫面上的圓點用 ::before 畫 */
+.mem-role-opt { position: relative; }
+.mem-role-opt input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; min-height: 0; padding: 0; }
+.mem-role-opt span { display: flex; flex-direction: column; padding-left: 30px; position: relative; pointer-events: none; }
+.mem-role-opt span::before { content: ''; position: absolute; left: 0; top: .15em; width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--muted); background: #fff; box-sizing: border-box; }
+.mem-role-opt:has(input:checked) span::before { border-color: var(--sky-deep); box-shadow: inset 0 0 0 4px #fff; background: var(--sky-deep); }
+.mem-role-opt:has(input:focus-visible) { outline: 3px solid var(--peach); outline-offset: 2px; }
+.mem-role-opt small { color: var(--muted); }
+.mem-role-opt:has(input:checked) { border-color: var(--sky-deep); background: var(--sky-soft); }
+.mem-why { padding-left: 1.2em; margin: .8em 0 0; display: flex; flex-direction: column; gap: .2em; }
+@media (max-width: 759px) {
+  .mem-row { grid-template-columns: minmax(0, 1fr); }
+  .mem-tools { grid-column: 1 / -1; }
+  .mem-tools .btn-sm { flex: 1 1 0; padding: .2em .3em; }
+  .mem-add > .btn { width: 100%; }
+}
+/* v2.6（G2）：不在清單內的單元 */
+.set-orphans { border: 1px solid #f0d58a; background: #fff8e1; border-radius: 12px; padding: .6em .8em; margin: .4em 0 .6em; }
+.set-orphan-h { margin: 0 0 .4em; font-size: .88rem; color: #6b4e00; }
+.set-orphan-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.set-orphan p { margin: 0 0 .3em; font-size: .9rem; overflow-wrap: anywhere; }
+.set-orphan-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.set-orphan-tools select { min-height: 44px; border: 1px solid var(--line); border-radius: 10px; padding: 0 .6em; background: #fff; flex: 1 1 180px; min-width: 0; }
+.set-orphan-tools .set-warn { flex: 1 1 100%; }

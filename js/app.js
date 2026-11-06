@@ -12,6 +12,7 @@ WC.app = (function () {
     WC.printview.bind();
     WC.ai.bind();
     WC.settings.bind();
+    WC.members.bind();
     bindHeader();
     WC.state.month = readMonthFromUrl() || U.currentMonth();
 
@@ -30,6 +31,8 @@ WC.app = (function () {
   }
 
   async function afterSignIn() {
+    // 複核 R1：每次登入（含換帳號、示範換身分）都重新允許「無法使用」處理；否則第二次選到非成員帳號時畫面全空白、token 也沒清
+    notMemberShown = false;
     // v2.4 F4：bootstrap 與該月紀錄同時送出（兩者互不相依），省一次往返；畫面仍等 bootstrap 的設定到了才畫
     const month = WC.state.month;
     const prefetch = { month: month, p: WC.api.listRecords(month).then(function (r) { return { ok: true, r: r }; }, function (e) { return { ok: false, e: e }; }) };
@@ -40,18 +43,21 @@ WC.app = (function () {
       WC.state.configVersion = b.configVersion || '';
       WC.state.ai = b.ai || { enabled: false };
       WC.settings.clear();   // v2.5：換身分或重新登入時，設定草稿作廢
+      WC.members.clear();    // v2.6
+      U.$('#fatal').hidden = true;
       renderBrokenBanner(b.me, b.brokenRows || []);
       applyConfig(b.config);
       U.$('#who').textContent = b.me.name + '（' + b.me.role + '）';
+      if (WC.api.isDemo) renderDemoIdentities();
       // 版本：前端與後端不同時一併顯示，方便確認部署是否完成
       U.$('#app-version').textContent = '白雲家訊 v' + WC.VERSION +
         (b.version && b.version !== 'demo' && b.version !== WC.VERSION ? '（後端 v' + b.version + '，請確認兩邊都已更新）' : '');
       U.$('#app').hidden = false;
       await reload(prefetch);
-      if (WC.state.tab === 'settings') WC.settings.onShow();
+      if (WC.state.tab === 'settings') { WC.settings.onShow(); WC.members.onShow(); }
     } catch (e) {
-      if (e.code === 'NOT_MEMBER') WC.auth.forget();   // 換帳號重新整理時不要再用這個登入
-      if (e.code === 'NOT_MEMBER' || e.code === 'NOT_SETUP') showFatal(e.message);
+      if (e.code === 'NOT_MEMBER') { onNotMember(e.message); return; }
+      if (e.code === 'NOT_SETUP') showFatal(e.message);
       else if (e.code !== 'BAD_TOKEN' && e.code !== 'NO_TOKEN') showFatal('載入失敗：' + U.errMsg(e));
     }
   }
@@ -78,10 +84,86 @@ WC.app = (function () {
     U.$('#brand-class').textContent = cfg.className;
   }
 
-  function showFatal(msg) {
+  /**
+   * v2.6：任何請求收到 NOT_MEMBER（剛被主編停用、或不在成員名單）→ 清掉 token，換成「無法使用」畫面。
+   * 尚未存檔的編輯視窗會跟著隱藏（內容無法再送出）；訊息寫明原因與該怎麼辦。
+   */
+  let notMemberShown = false;
+  function onNotMember(msg) {
+    if (notMemberShown) return;
+    notMemberShown = true;
+    WC.auth.forgetAccount();   // G5：清 token，並關掉 Google 自動選帳號（避免又選回同一個非成員帳號）
+    WC.settings.clear();
+    WC.members.clear();
+    U.$('#app').hidden = true;
+    U.$('#editor').hidden = true;
+    document.body.classList.remove('modal-open');
+    // 回測 Q1：示範模式請用上方「示範身分」切換；Q2：「請聯絡主編」只在這裡寫一次（後端訊息不再重複）
+    showFatal((msg || '您的帳號不在成員名單內，或已被停用。') +
+      (WC.api.isDemo ? '請用上方「示範身分」切換成其他人。' : '如果覺得有誤，請聯絡主編到「⚙ 設定 → 成員」幫您啟用；也可以換一個帳號登入。'), { switchAccount: true });
+  }
+
+  /**
+   * v2.6：主編限定動作回 FORBIDDEN（自己剛被另一位主編改成老師）→ 重新讀身分；「⚙ 設定」分頁隨之消失。
+   * 同時有好幾個請求失敗時只做一次。
+   */
+  let refreshingRole = null;
+  function refreshRole() {
+    if (refreshingRole) return refreshingRole;
+    refreshingRole = (async function () {
+      try {
+        const b = await WC.api.bootstrap();
+        const wasEditor = WC.state.me && WC.state.me.role === '主編';
+        WC.state.me = b.me;
+        U.$('#who').textContent = b.me.name + '（' + b.me.role + '）';
+        renderBrokenBanner(b.me, b.brokenRows || []);
+        if (wasEditor && b.me.role !== '主編') {
+          WC.settings.clear();
+          WC.members.clear();
+          U.toast('您的角色已改為「' + b.me.role + '」，設定分頁已關閉。', 'info');
+        }
+        await reload();
+      } catch (e) {
+        if (e.code === 'NOT_MEMBER') onNotMember(e.message);
+      } finally { refreshingRole = null; }
+    })();
+    return refreshingRole;
+  }
+
+  /** v2.6：示範身分選單依示範成員表重畫（新增的成員也能切過去試） */
+  function renderDemoIdentities() {
+    const sel = U.$('#demo-role');
+    const cur = WC.demo.getUserKey();
+    sel.innerHTML = WC.demo.identities().map(function (x) {
+      return '<option value="' + U.esc(x.key) + '"' + (x.key === cur ? ' selected' : '') + '>' + U.esc(x.label) + '</option>';
+    }).join('');
+  }
+
+  /**
+   * v2.6（G1）：重新讀設定（bootstrap）；版本不同時更新頁首、單元篩選、分頁頁數並重畫。存檔回 UNIT_CHANGED 時用。
+   * 回傳最新的 config。
+   */
+  async function refreshConfig() {
+    const b = await WC.api.bootstrap();
+    WC.state.me = b.me;
+    if (b.configVersion !== WC.state.configVersion) {
+      WC.state.config = b.config;
+      WC.state.configVersion = b.configVersion || '';
+      if (WC.state.filterUnit && b.config.units.indexOf(WC.state.filterUnit) < 0) WC.state.filterUnit = '';
+      applyConfig(b.config);
+      render();
+      // 複核 R6：單元名稱變了，本月紀錄的單元也可能跟著改，一併重抓
+      try { await reload(); } catch (e) { /* reload 自己會提示 */ }
+    }
+    return b.config;
+  }
+
+  function showFatal(msg, opt) {
     const box = U.$('#fatal');
     box.hidden = false;
     U.$('#fatal-msg').textContent = msg;
+    // G5：不是成員時提供「換一個帳號登入」（示範模式用上方的示範身分切換）
+    U.$('#btn-switch-account').hidden = !(opt && opt.switchAccount) || WC.api.isDemo;
   }
 
   function readMonthFromUrl() {
@@ -151,7 +233,7 @@ WC.app = (function () {
     U.$('#pages-total').textContent = pages;
     WC.records.render();
     WC.layout.render();
-    if (WC.state.tab === 'settings') WC.settings.render();
+    if (WC.state.tab === 'settings') { WC.settings.render(); WC.members.render(); }
     U.$all('.tab').forEach(function (t) {
       const on = t.getAttribute('data-tab') === WC.state.tab;
       t.classList.toggle('on', on);
@@ -160,7 +242,7 @@ WC.app = (function () {
     U.$all('.panel').forEach(function (p) { p.hidden = p.id !== 'panel-' + WC.state.tab; });
     WC.printview.refreshIfVisible(); // 只在家訊編排分頁顯示時排 A4 預覽
     U.$('#role-hint').textContent = isEditor
-      ? '您是主編：在卡片上按「採用／不採用」即可決定；到「家訊編排」可把素材移到別頁；到「⚙ 設定」可增刪單元。'
+      ? '您是主編：在卡片上按「採用／不採用」即可決定；到「家訊編排」可把素材移到別頁；到「⚙ 設定」可增刪單元、管理成員。'
       : '';
     U.$('#role-hint').hidden = !isEditor;
     const t = U.todayStr();
@@ -222,23 +304,31 @@ WC.app = (function () {
     U.$('#btn-new').addEventListener('click', function () { WC.editor.open(null); });
     // v2.5（回測 6）：有未儲存的設定時，登出、重新整理、換示範身分前先用頁內確認視窗詢問
     U.$('#btn-signout').addEventListener('click', async function () { if (await WC.settings.confirmDiscard('登出')) WC.auth.signOut(); });
+    U.$('#btn-switch-account').addEventListener('click', function () {
+      U.$('#fatal').hidden = true;
+      notMemberShown = false;   // 複核 R1
+      WC.auth.switchAccount();
+    });
     U.$('#btn-reload').addEventListener('click', async function () { if (await WC.settings.confirmDiscard('重新整理')) location.reload(); });
     U.$('.tabs').addEventListener('click', function (e) {
       const t = e.target.closest('.tab');
       if (!t) return;
       WC.state.tab = t.getAttribute('data-tab');
       render();
-      if (WC.state.tab === 'settings') WC.settings.onShow();
+      if (WC.state.tab === 'settings') { WC.settings.onShow(); WC.members.onShow(); }
     });
     U.$('#demo-role').addEventListener('change', async function (e) {
       if (!(await WC.settings.confirmDiscard('切換示範身分'))) { e.target.value = WC.demo.getUserKey(); return; }
       WC.demo.setUser(e.target.value);
+      U.$('#fatal').hidden = true;
+      notMemberShown = false;   // 複核 R1
       await afterSignIn();
+      renderDemoIdentities();
       U.toast('已切換示範身分', 'info');
     });
   }
 
-  return { start: start, reload: function () { return reload(); }, render: render, applyConfig: applyConfig, afterSave: afterSave, afterDelete: afterDelete,
+  return { start: start, reload: function () { return reload(); }, render: render, applyConfig: applyConfig, onNotMember: onNotMember, refreshRole: refreshRole, refreshConfig: refreshConfig, renderDemoIdentities: renderDemoIdentities, afterSave: afterSave, afterDelete: afterDelete,
     reloadCount: function () { return reloadCount; }, localUpdates: function () { return localUpdates; } };
 })();
 

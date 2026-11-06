@@ -25,13 +25,31 @@ WC.demo = (function () {
   const LIMIT_MAX_PHOTOS = 20;
   const SETTINGS_LIMITS = { unitName: 12, unitsMin: 1, unitsMax: 12, className: 20, newsletterName: 20, footer: 60, emptyText: 100 };
   const unitAliases = Object.create(null);
+  let unitChanges = [];   // v2.6（G1；複核 R2）：7 天內每次設定修改的改名對照 [{ names, at }]（最多 20 次）
+  function unitChangeNames() {
+    const now = Date.now();
+    unitChanges = unitChanges.filter(function (c) { return now - c.at < 7 * 24 * 3600 * 1000; });
+    const out = [];
+    unitChanges.forEach(function (c) { c.names.forEach(function (n) { if (out.indexOf(n) < 0) out.push(n); }); });
+    return out;
+  }
   // 與 GAS 相同的字元規則（C0、DEL、C1、雙向控制、行／段分隔；單元名稱另擋填充字）
   const CTRL_BIDI_RE = /[\u0000-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069\u2028\u2029]/;
-  const UNIT_BAD_CHARS_RE = /[\u0000-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069\u2028\u2029\u115F\u1160\u3164\uFFA0\u2800]/;
+  const UNIT_BAD_CHARS_RE = /[\u0000-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069\u2028\u2029\u115F\u1160\u3164\uFFA0\u2800\u180E]/;
+  const UNIT_HAS_LETTER_RE = /[\p{L}\p{N}]/u;   // v2.6（G3）
+  const UNIT_RESERVED = ['__proto__', 'constructor', 'prototype'];
   const TEACHER_STATUSES = ['草稿', '已確認'];
   let demoResponseLimit = 6 * 1024 * 1024; // 模擬 getPhotos 回應上限；回測可用 WC.demo.setResponseLimit() 調小
   const STATUSES = ['草稿', '已確認', '已採用', '不採用'];
 
+  // v2.6：模擬成員表（規則與 gas/Code.gs 的 readMembers_、planMember_、actionSaveMember_ 相同）。
+  // 每個請求都依「目前示範身分的 Email」重新查成員表決定姓名與角色，所以停用、降級後下一個請求就生效。
+  const members = [
+    { email: USERS.editor.email, name: USERS.editor.name, role: '主編', active: true },
+    { email: USERS.teacher.email, name: USERS.teacher.name, role: '老師', active: true },
+    { email: 'editor2@demo.tw', name: '陳老師', role: '主編', active: true }
+  ];
+  let currentEmail = USERS.editor.email;
   let currentUser = USERS.editor;
   const records = [];
   const photoStore = {}; // fileId → data URL
@@ -202,6 +220,11 @@ WC.demo = (function () {
     // 與 GAS keepServerUnit_ 相同：沒改單元、但這筆已被主編改名／互換／搬移 → 保留目前的單元
     const sent = String(r.unit || '');
     const atOpen = typeof r.unitAtOpen === 'string' ? r.unitAtOpen : null;
+    // v2.6（G1）：與 GAS unitChangedSinceOpen_ 相同
+    if (typeof r.configVersion === 'string' && r.configVersion && r.configVersion !== configVersion() &&
+        unitChangeNames().indexOf(sent) >= 0 && CONFIG.units.indexOf(sent) >= 0 && (!old || sent !== atOpen)) {   // 複核 R2、R3
+      fail('UNIT_CHANGED', '單元名稱剛被主編調整過，請重新選擇單元後再送出（已填的內容都還在）。');
+    }
     const unit = resolveRecordUnit(old && atOpen !== null && sent === atOpen && old.unit !== atOpen ? old.unit : sent, old);
     if (r.layout && CONFIG.layouts.indexOf(r.layout) < 0 && !(old && old.layout === r.layout)) fail('BAD_REQUEST', '偏好版型不在設定表的版型清單內');
     if (STATUSES.indexOf(r.status) < 0) fail('BAD_REQUEST', '處理狀態不正確');
@@ -233,7 +256,7 @@ WC.demo = (function () {
         const mine = old && old.photos.some(function (x) { return x.id === fid || x.thumbId === fid; });
         const ownerExists = m && m.recordId && records.some(function (r) { return r.id === m.recordId; });
         if (!mine && m && m.recordId && m.recordId !== (old ? old.id : '') && ownerExists) {
-          fail('PHOTO_TAKEN', '照片已屬於其他紀錄，請移除後重新加入。');
+          fail('PHOTO_TAKEN', '照片已屬於其他紀錄，請移除後重新加入。如果剛剛按過送出（網路慢或逾時），請先重新整理，看看是否已經存好。');
         }
         // 與 GAS 相同：無主照片（未標記或所屬紀錄已刪除）只有上傳者本人或主編能用
         if (!mine && m && (!m.recordId || !ownerExists) && currentUser.role !== '主編' && m.uploader !== currentUser.email) {
@@ -241,7 +264,7 @@ WC.demo = (function () {
         }
         records.forEach(function (r) {
           if (old && r.id === old.id) return;
-          r.photos.forEach(function (x) { if (x.id === fid || x.thumbId === fid) fail('PHOTO_TAKEN', '照片已屬於其他紀錄，請移除後重新加入。'); });
+          r.photos.forEach(function (x) { if (x.id === fid || x.thumbId === fid) fail('PHOTO_TAKEN', '照片已屬於其他紀錄，請移除後重新加入。如果剛剛按過送出（網路慢或逾時），請先重新整理，看看是否已經存好。'); });
         });
       });
     });
@@ -308,10 +331,13 @@ WC.demo = (function () {
     if (!s) fail('BAD_REQUEST', label + '不可空白');
     if (/[,，、]/.test(s)) fail('BAD_REQUEST', label + '「' + s + '」不能有逗號或頓號');
     if (UNIT_BAD_CHARS_RE.test(s)) fail('BAD_REQUEST', label + '不可換行，也不可含控制字元或看不見的特殊字元');
+    if (!UNIT_HAS_LETTER_RE.test(s)) fail('BAD_REQUEST', label + '至少要有一個中文字、英文字母或數字');
+    if (UNIT_RESERVED.indexOf(s) >= 0) fail('BAD_REQUEST', label + '「' + s + '」是系統保留字，請換一個名稱');
     if (Array.from(s).length > SETTINGS_LIMITS.unitName) fail('BAD_REQUEST', label + '「' + s + '」最多 ' + SETTINGS_LIMITS.unitName + ' 字');
     return s;
   }
-  function planSettings(p) {
+  function planSettings(p, orphans) {
+    orphans = orphans || Object.create(null);
     const s = p.settings || {};
     const text = function (v, max, label, required) {
       const t = String(v == null ? '' : v).replace(/[\r\n\t\u2028\u2029]+/g, ' ').trim();
@@ -347,9 +373,11 @@ WC.demo = (function () {
     });
     (Array.isArray(p.removed) ? p.removed : []).forEach(function (r) {
       const name = String(r && r.name || '');
-      if (CONFIG.units.indexOf(name) < 0) fail('BAD_REQUEST', '要刪除的單元「' + name + '」不在目前的清單內，請重新整理後再改');
+      const isOrphan = CONFIG.units.indexOf(name) < 0 && Object.prototype.hasOwnProperty.call(orphans, name);
+      if (CONFIG.units.indexOf(name) < 0 && !isOrphan) fail('BAD_REQUEST', '要刪除的單元「' + name + '」不在目前的清單內，請重新整理後再改');
       if (fromSeen[name] || name in removed) fail('BAD_REQUEST', '單元「' + name + '」不能同時保留又刪除');
       const moveTo = r && r.moveTo ? String(r.moveTo) : '';
+      if (isOrphan && !moveTo) fail('BAD_REQUEST', '不在清單內的單元「' + name + '」要選擇搬到哪個單元');
       if (moveTo && !seen[moveTo]) fail('BAD_REQUEST', '「' + name + '」的紀錄要移到的單元「' + moveTo + '」不在新清單內');
       removed[name] = moveTo;
       if (moveTo) map[name] = moveTo;
@@ -365,22 +393,33 @@ WC.demo = (function () {
     records.forEach(function (r) { counts[r.unit] = (counts[r.unit] || 0) + 1; maxPhotosUsed = Math.max(maxPhotosUsed, r.photos.length); });
     return { unitCounts: counts, maxPhotosUsed: maxPhotosUsed };
   }
+  /** v2.6（G2）：與 GAS orphanUnits_ 相同 */
+  function orphanUnits(counts) {
+    return Object.keys(counts).filter(function (u) { return u && CONFIG.units.indexOf(u) < 0; })
+      .map(function (u) { return { name: u, count: counts[u] }; })
+      .sort(function (a, b) { return b.count - a.count || (a.name < b.name ? -1 : 1); });
+  }
   function settingsResult(extra) {
     return Object.assign({ config: clone(CONFIG), configVersion: configVersion(), limits: Object.assign({ maxPhotos: LIMIT_MAX_PHOTOS }, SETTINGS_LIMITS) },
-      clone(unitUsage()), extra || {});
+      clone(unitUsage()), { orphans: orphanUnits(unitUsage().unitCounts) }, extra || {});
   }
   function requireEditor() { if (currentUser.role !== '主編') fail('FORBIDDEN', '只有主編可以查看或修改設定。'); }
   function saveSettings(p) {
     requireEditor();
     if (typeof p.expectedVersion !== 'string' || !p.expectedVersion) fail('BAD_REQUEST', '缺少設定版本（請重新整理後再改）。');
     if (p.expectedVersion !== configVersion()) fail('CONFLICT', '設定剛被其他主編（或有人在試算表）改過，請重新整理後再改。');
-    const plan = planSettings(p);
     const usage = unitUsage();
+    const orphanSet = Object.create(null);
+    orphanUnits(usage.unitCounts).forEach(function (x) { orphanSet[x.name] = x.count; });
+    const plan = planSettings(p, orphanSet);
     Object.keys(plan.removed).forEach(function (name) {
       const n = usage.unitCounts[name] || 0;
       if (n && !plan.removed[name]) { const e = new Error('單元「' + name + '」還有 ' + n + ' 筆紀錄，請先選擇要移到哪個單元。'); e.code = 'UNIT_HAS_RECORDS'; e.unit = name; e.count = n; throw e; }
     });
     let moved = 0;
+    const names = [];
+    Object.keys(plan.map).forEach(function (f) { [f, plan.map[f]].forEach(function (n) { if (names.indexOf(n) < 0) names.push(n); }); });
+    if (names.length) { unitChangeNames(); unitChanges = unitChanges.concat([{ names: names, at: Date.now() }]).slice(-20); }
     records.forEach(function (r) {   // 與 GAS 相同：只改單元，不改 updatedAt
       if (r.unit in plan.map && plan.map[r.unit] !== r.unit) { r.unit = plan.map[r.unit]; moved++; }
     });
@@ -398,7 +437,73 @@ WC.demo = (function () {
   }
   let lastSettingsWrite = null;
 
+  // ---------- v2.6 成員（規則與 gas/Code.gs 相同） ----------
+  const MEMBER_LIMITS = { name: 20, email: 254 };
+  const EMAIL_RE = /^[A-Za-z0-9._%+'\-]+@[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}$/;
+  function membersVersion() {
+    const s = JSON.stringify(members);
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    return 'mem' + h.toString(36);
+  }
+  function memberOf(email) { return members.find(function (m) { return m.email === email; }) || null; }
+  function activeEditors() { return members.filter(function (m) { return m.active && m.role === '主編'; }).length; }
+  function membersResult(extra) {
+    return Object.assign({
+      members: members.map(function (m) { return { email: m.email, name: m.name, role: m.role, active: m.active, dup: false, isMe: m.email === currentEmail }; }),
+      membersVersion: membersVersion(), activeEditors: activeEditors(), limits: clone(MEMBER_LIMITS)
+    }, extra || {});
+  }
+  function cleanMemberEmail(v) {
+    const s = String(v == null ? '' : v).trim().toLowerCase();
+    if (!s) fail('BAD_REQUEST', '請填寫 Email');
+    if (s.length > MEMBER_LIMITS.email || !EMAIL_RE.test(s) || /\.\./.test(s)) fail('BAD_REQUEST', 'Email「' + s.slice(0, 80) + '」格式不正確（例如 teacher@gmail.com）');
+    return s;
+  }
+  function cleanMemberName(v) {
+    const t = String(v == null ? '' : v).replace(/[\r\n\t\u2028\u2029]+/g, ' ').replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').trim();
+    if (CTRL_BIDI_RE.test(t)) fail('BAD_REQUEST', '姓名不可含控制字元或文字方向控制字元');
+    if (!t) fail('BAD_REQUEST', '請填寫姓名');
+    if (Array.from(t).length > MEMBER_LIMITS.name) fail('BAD_REQUEST', '姓名最多 ' + MEMBER_LIMITS.name + ' 字');
+    return t;
+  }
+  function cleanMemberRole(v) { if (v === '主編' || v === '老師') return v; fail('BAD_REQUEST', '角色只能是「老師」或「主編」'); }
+  function saveMember(p) {
+    requireEditor();
+    if (typeof p.expectedVersion !== 'string' || !p.expectedVersion) fail('BAD_REQUEST', '缺少成員名單版本（請重新載入成員名單後再改）。');
+    if (p.expectedVersion !== membersVersion()) fail('CONFLICT', '成員名單剛被其他主編（或有人在試算表）改過，請重新載入後再操作一次。');
+    const m = p.member || {};
+    if (p.op !== 'add' && p.op !== 'update') fail('BAD_REQUEST', '不支援的成員操作');
+    const email = cleanMemberEmail(m.email);
+    const target = memberOf(email);
+    if (p.op === 'add') {
+      if (target) {
+        const e = new Error(target.active ? '「' + email + '」已經是成員（' + (target.name || email) + '），不必再新增。'
+          : '「' + email + '」已在成員名單內但目前停用，請在清單中按「啟用」，不必再新增。');
+        e.code = 'DUPLICATE_MEMBER'; e.email = email; e.inactive = !target.active; throw e;
+      }
+      members.push({ email: email, name: cleanMemberName(m.name), role: cleanMemberRole(m.role === undefined ? '老師' : m.role), active: true });
+      return membersResult({ saved: email });
+    }
+    if (!target) fail('NOT_FOUND', '成員名單裡找不到「' + email + '」，請重新載入成員名單。');
+    if (Object.prototype.hasOwnProperty.call(m, 'newEmail')) fail('BAD_REQUEST', 'Email 建立後不能修改；要換帳號請新增一筆、再停用舊的。');
+    const next = { name: target.name, role: target.role, active: target.active };
+    if (m.name !== undefined) next.name = cleanMemberName(m.name);
+    if (m.role !== undefined) next.role = cleanMemberRole(m.role);
+    if (m.active !== undefined) { if (typeof m.active !== 'boolean') fail('BAD_REQUEST', '啟用只能是 true 或 false'); next.active = m.active; }
+    if (email === currentEmail && ((target.active && !next.active) || (target.role !== next.role && next.role !== '主編'))) {
+      fail('SELF_LOCKOUT', '不能停用自己或把自己改成老師（以免把自己鎖在外面）；需要的話，請另一位主編操作。');
+    }
+    if (target.active && target.role === '主編' && !(next.active && next.role === '主編') && activeEditors() <= 1) {
+      fail('LAST_EDITOR', '「' + (target.name || email) + '」是目前唯一啟用中的主編，不能停用或改成老師；請先把另一位成員改成主編。');
+    }
+    Object.assign(target, next);
+    return membersResult({ saved: email });
+  }
+
   const handlers = {
+    listMembers: function () { requireEditor(); return membersResult(); },
+    saveMember: function (p) { return saveMember(p); },
     getSettings: function () { requireEditor(); return settingsResult(); },
     saveSettings: function (p) { return saveSettings(p); },
     aiDraft: function (p) { return demoAiDraft(p); },
@@ -499,6 +604,7 @@ WC.demo = (function () {
   async function handle(action, params) {
     callCount[action] = (callCount[action] || 0) + 1;
     if (action === 'uploadPhoto') {
+      resolveMe();
       uploadsActive += 1; uploadsMax = Math.max(uploadsMax, uploadsActive);
       try {
         await delay(uploadDelay);
@@ -507,6 +613,7 @@ WC.demo = (function () {
       } finally { uploadsActive -= 1; }
     }
     await delay(150);
+    resolveMe();
     const h = handlers[action];
     if (!h) fail('BAD_ACTION', '不支援的動作：' + action);
     return h(clone(params));
@@ -520,8 +627,30 @@ WC.demo = (function () {
   function recordPhotos(id) { const r = records.find(function (x) { return x.id === id; }); return r ? clone(r.photos) : null; }
   function allRecordPhotoIds() { const out = []; records.forEach(function (r) { r.photos.forEach(function (ph) { out.push(ph.id, ph.thumbId); }); }); return out; }
 
-  function setUser(key) { if (USERS[key]) currentUser = USERS[key]; }
-  function getUserKey() { return currentUser === USERS.editor ? 'editor' : 'teacher'; }
+  /** v2.6：與 GAS doPost 相同，每個請求都重查成員表；不在名單或已停用 → NOT_MEMBER */
+  function resolveMe() {
+    const m = memberOf(currentEmail);
+    if (!m || !m.active) fail('NOT_MEMBER', '您的帳號（' + currentEmail + '）不在成員名單內，或已被停用。');
+    currentUser = { email: m.email, name: m.name || m.email, role: m.role === '主編' ? '主編' : '老師' };
+  }
+  /** 示範身分：'editor'、'teacher' 或成員的 Email */
+  function setUser(key) {
+    const email = USERS[key] ? USERS[key].email : String(key || '');
+    if (memberOf(email)) currentEmail = email;
+    const m = memberOf(currentEmail);
+    if (m && m.active) currentUser = { email: m.email, name: m.name, role: m.role };
+  }
+  function getUserKey() { return currentEmail === USERS.editor.email ? 'editor' : currentEmail === USERS.teacher.email ? 'teacher' : currentEmail; }
+  /** v2.6：示範身分選單（成員表的每一位，含停用者） */
+  function identities() {
+    return members.map(function (m) {
+      const key = m.email === USERS.editor.email ? 'editor' : m.email === USERS.teacher.email ? 'teacher' : m.email;
+      return { key: key, label: m.name + '（' + m.role + (m.active ? '' : '，已停用') + '）' };
+    });
+  }
+  /** 回測用：模擬有人在試算表手改成員表（版本會變） */
+  function editMemberSheet(email, patch) { const m = memberOf(email); if (m) Object.assign(m, patch || {}); return !!m; }
+  function membersNow() { return clone(members); }
 
   seed();
   /** 回測用：模擬設定表改名（例如把某單元移除），測試「（舊值）」選項 */
@@ -545,8 +674,10 @@ WC.demo = (function () {
   /** 回測用（v2.5）：所有紀錄的單元與 updatedAt（確認改名搬移不改 updatedAt）、目前設定、單元別名 */
   function recordUnits() { return records.map(function (r) { return { id: r.id, title: r.title, unit: r.unit, updatedAt: r.updatedAt }; }); }
   function configNow() { return clone(CONFIG); }
+  /** 回測用（v2.6 G2）：模擬「紀錄表有、單元清單沒有」的孤兒單元（例如手改設定表或中途失敗） */
+  function setRecordUnit(title, unit) { const r = records.find(function (x) { return x.title === title; }); if (r) r.unit = unit; return !!r; }
   function aliases() { const o = {}; Object.keys(unitAliases).forEach(function (k) { o[k] = unitAliases[k].to; }); return o; }
 
   return { stats: stats, resetStats: resetStats, setUploadDelay: setUploadDelay, failUploads: failUploads, recordPhotos: recordPhotos, allRecordPhotoIds: allRecordPhotoIds,
-    handle: handle, setUser: setUser, getUserKey: getUserKey, setConfig: setConfig, markBroken: markBroken, repair: repair, photoTag: photoTag, recordUnits: recordUnits, configNow: configNow, aliases: aliases, configVersion: configVersion, fakeUpload: fakeUpload, setResponseLimit: setResponseLimit, aiCalls: aiCalls, aiFailNext: aiFailNext, aiLast: function () { return demoAiLast ? clone(demoAiLast) : null; } };
+    handle: handle, setUser: setUser, getUserKey: getUserKey, identities: identities, editMemberSheet: editMemberSheet, membersNow: membersNow, membersVersion: membersVersion, setConfig: setConfig, markBroken: markBroken, repair: repair, photoTag: photoTag, recordUnits: recordUnits, configNow: configNow, setRecordUnit: setRecordUnit, aliases: aliases, configVersion: configVersion, fakeUpload: fakeUpload, setResponseLimit: setResponseLimit, aiCalls: aiCalls, aiFailNext: aiFailNext, aiLast: function () { return demoAiLast ? clone(demoAiLast) : null; } };
 })();

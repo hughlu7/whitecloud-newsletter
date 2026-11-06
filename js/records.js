@@ -141,7 +141,8 @@ WC.records = (function () {
       id: rec.id, title: rec.title, date: rec.date, unit: rec.unit, rawText: rec.rawText, summary: rec.summary,
       newsletter: rec.newsletter, layout: rec.layout, status: rec.status, photos: rec.photos,
       unitConfirmed: rec.unitConfirmed !== false,  // v2.2 L2：快速更新也帶上，避免草稿的「單元未確認」被改掉
-      unitAtOpen: rec.unit                         // v2.5：沒改單元時，後端保留伺服器上的單元（主編可能剛改名）
+      unitAtOpen: rec.unit,                        // v2.5：沒改單元時，後端保留伺服器上的單元（主編可能剛改名）
+      configVersion: WC.state.configVersion || undefined   // v2.6（G1）：「移到…」到剛被改名的單元時，後端回 UNIT_CHANGED
     };
     Object.assign(data, patch);
     let ok = false;
@@ -150,7 +151,13 @@ WC.records = (function () {
       ok = true;
       if (okMsg) U.toast(okMsg, 'ok');
     } catch (err) {
-      U.toast((err && err.code === 'CONFLICT' ? '這筆剛被別人改過，已重新載入，請再按一次。' : '更新失敗：' + U.errMsg(err)), 'error');
+      let refreshed = true;
+      if (err && err.code === 'UNIT_CHANGED') {   // v2.6（G1）：單元剛被改名，更新單元清單
+        try { await WC.app.refreshConfig(); } catch (e) { refreshed = false; }   // 複核 R6
+      }
+      U.toast((err && err.code === 'CONFLICT' ? '這筆剛被別人改過，已重新載入，請再按一次。'
+        : err && err.code === 'UNIT_CHANGED' ? (refreshed ? '單元名稱剛被主編調整過，已更新單元清單，請再選一次。' : '單元名稱剛被主編調整過，但讀取最新設定失敗，請重新整理頁面後再選一次。')
+        : '更新失敗：' + U.errMsg(err)), 'error');
     } finally {
       pendingIds[rec.id] = 'done';
     }

@@ -44,7 +44,10 @@
     <div class="login-card">
       <h1>無法使用</h1>
       <p id="fatal-msg"></p>
-      <button type="button" id="btn-reload" class="btn">重新整理</button>
+      <div class="fatal-actions">
+        <button type="button" id="btn-switch-account" class="btn btn-primary" hidden>換一個帳號登入</button>
+        <button type="button" id="btn-reload" class="btn">重新整理</button>
+      </div>
     </div>
   </section>
 
@@ -158,13 +161,15 @@
       <!-- v2.5 設定（只有主編）：單元管理＋家訊資訊；按「儲存設定」才寫入 -->
       <section id="panel-settings" class="panel" hidden>
         <div class="settings">
-          <p class="settings-intro">在這裡修改家訊的單元與文字，按最下方「儲存設定」才會生效。</p>
+          <p class="settings-intro">在這裡修改家訊的單元與文字，按「儲存設定」才會生效。
+            <span class="settings-intro-members">成員管理在最下方，那裡的修改按下就立即儲存。<button type="button" id="set-goto-members" class="btn-link">跳到成員</button></span></p>
           <div id="settings-msg" class="settings-msg" role="status" aria-live="polite" tabindex="-1" hidden></div>
 
           <section class="set-card" aria-labelledby="set-units-h">
             <h3 id="set-units-h">家訊單元 <small id="set-units-count" class="set-count"></small></h3>
             <p class="set-help"><b>每個單元＝家訊的一頁</b>，順序就是頁序；單元數＝家訊頁數（1–12 個）。名稱最多 12 字，不能有逗號或頓號。</p>
             <ol id="set-unit-list" class="set-unit-list"></ol>
+            <div id="set-orphans" class="set-orphans" role="region" aria-label="不在清單中的單元" hidden></div>
             <p id="set-min-note" class="set-help set-min-note" role="note" hidden></p>
             <div class="set-add">
               <label class="visually-hidden" for="set-unit-new">新單元名稱</label>
@@ -212,6 +217,38 @@
             <button type="button" id="set-reset" class="btn">放棄修改</button>
             <button type="button" id="set-save" class="btn btn-primary">儲存設定</button>
           </div>
+
+          <!-- v2.6：成員（逐筆立即儲存，與上方「儲存設定」無關） -->
+          <section id="set-members" class="set-card members-card" aria-labelledby="set-members-h">
+            <h3 id="set-members-h" tabindex="-1">成員 <small id="mem-count" class="set-count"></small></h3>
+            <p class="set-help"><b>這裡的修改按下就立即儲存</b>，不必按上面的「儲存設定」。每位成員用自己的 Google 帳號登入；被停用的人，下一次按任何按鈕或重新整理後就不能再使用。</p>
+            <div id="mem-msg" class="settings-msg" role="status" aria-live="polite" tabindex="-1" hidden></div>
+            <ul id="mem-list" class="mem-list" aria-label="成員名單"></ul>
+
+            <div class="mem-add" role="group" aria-labelledby="mem-add-h">
+              <h4 id="mem-add-h">新增成員</h4>
+              <div class="set-grid">
+                <label class="set-field"><span>Google 帳號（Email）</span>
+                  <input id="mem-email" type="email" inputmode="email" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="例如 teacher@gmail.com"></label>
+                <label class="set-field"><span>姓名 <small class="muted">（顯示在紀錄上）</small> <small id="mem-name-count" class="counter">0／20</small></span>
+                  <input id="mem-name" type="text" autocomplete="off" placeholder="例如 林老師"></label>
+                <fieldset class="set-field wide mem-role">
+                  <legend>角色</legend>
+                  <label class="mem-role-opt"><input type="radio" name="mem-role" value="老師" checked><span><b>老師</b><small>新增紀錄、修改自己還沒定案的紀錄</small></span></label>
+                  <label class="mem-role-opt"><input type="radio" name="mem-role" value="主編"><span><b>主編</b><small>另外可以決定採用、編排家訊，修改設定與成員</small></span></label>
+                </fieldset>
+              </div>
+              <p id="mem-add-err" class="set-err" role="alert" hidden></p>
+              <button type="button" id="mem-add" class="btn btn-primary">＋ 新增成員</button>
+            </div>
+
+            <ul class="settings-note mem-why">
+              <li><b>為什麼不能刪除成員？</b>紀錄上的「投稿者」是用 Email 對應的；只停用、不刪除，舊紀錄才找得到是誰寫的，日後也能再啟用。</li>
+              <li><b>為什麼 Email 不能改？</b>同樣的理由。對方要換帳號時，請新增一筆新的 Email，再停用舊的。</li>
+              <li><b>改姓名之後</b>：新紀錄會用新姓名；已經存的紀錄仍顯示當時的姓名（不會回頭改）。</li>
+            </ul>
+            <p class="settings-note mem-sheet-note">試算表「成員表」仍可手動修改，但建議在這裡改（這裡會檢查格式、避免沒有主編）。</p>
+          </section>
         </div>
       </section>
     </main>
@@ -325,6 +362,8 @@
           <button type="button" id="btn-prev" class="btn btn-step">← 上一步</button>
           <button type="button" id="btn-draft" class="btn">只存草稿</button>
           <button type="button" id="btn-cancel" class="btn">關閉</button>
+          <!-- v2.6（G4）：送出後還在等照片上傳時，可以取消送出（照片繼續在背景上傳，內容保留） -->
+          <button type="button" id="btn-cancel-send" class="btn" hidden>取消送出</button>
           <button type="button" id="btn-next" class="btn btn-primary btn-step">下一步 →</button>
           <button type="submit" id="btn-save" class="btn btn-primary">送出</button>
         </footer>
@@ -398,6 +437,7 @@
   <script src="js/editor.js"></script>
   <script src="js/ai.js"></script>
   <script src="js/settings.js"></script>
+  <script src="js/members.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>
