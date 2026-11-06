@@ -1,9 +1,9 @@
 /**
- * 「六頁編排」分頁＋版型建議規則。
+ * 「家訊編排」分頁（v2.5 前叫「六頁編排」；頁數＝單元數，主編可在「設定」增刪單元）＋版型建議規則。
  *
  * 第 1 階段：一個單元一頁，列出每頁目前放了哪些「已採用」素材。
  * 主編可以（按鈕操作，不做拖拉）：
- *   - 把素材移到別的單元頁（改 unit）、移出六頁（改回「已送出」）
+ *   - 把素材移到別的單元頁（改 unit）、移出家訊（改回「已送出」）
  *   - 改單筆素材的版型
  *   - 從下方「待挑選」直接採用
  * 老師看得到六頁內容，但沒有這些按鈕。
@@ -60,7 +60,7 @@ WC.layout = (function () {
           return '<button type="button" class="btn-sm" data-act="to" data-v="' + U.esc(u) + '"' + (here ? ' disabled aria-current="true"' : busy ? ' disabled' : '') + '>' +
             (i + 1) + '. ' + U.esc(u) + (here ? '（目前）' : '') + '</button>';
         }).join('') +
-          '<button type="button" class="btn-sm btn-out" data-act="out"' + (busy ? ' disabled' : '') + '>移出六頁</button>' +
+          '<button type="button" class="btn-sm btn-out" data-act="out"' + (busy ? ' disabled' : '') + '>移出家訊</button>' +
           '<button type="button" class="btn-sm" data-act="move-cancel"' + (pending ? ' disabled' : '') + '>取消</button></div>';
       }
     }
@@ -127,7 +127,7 @@ WC.layout = (function () {
     box.hidden = !orphans.length;
     if (!orphans.length) { box.innerHTML = ''; return; }
     const canAct = isEditorRole();
-    box.innerHTML = '<b>有 ' + orphans.length + ' 筆已採用紀錄的單元已不在清單內</b>，不會排進六頁；' +
+    box.innerHTML = '<b>有 ' + orphans.length + ' 筆已採用紀錄的單元已不在清單內</b>，不會排進家訊；' +
       (canAct ? '請按「移到…」改成現有單元：' : '請主編改成現有單元：') +
       '<ul class="pi-list">' + orphans.map(function (r) {
         return canAct ? itemHtml(r, units, true).replace('<b class="pi-title">', '<b class="pi-title">（' + U.esc(r.unit) + '）')
@@ -154,7 +154,7 @@ WC.layout = (function () {
         // quickUpdate 會等 WC.app.reload() 合併後的「最後一次重繪」完成才 resolve，焦點不會被之後的重繪吃掉
         WC.records.quickUpdate(rec, { unit: v }, '「' + rec.title + '」移到「' + v + '」頁').then(function () { focusIn(rec.id, '[data-act="move"]'); });
       }
-      if (act === 'out') { movingId = ''; WC.records.quickUpdate(rec, { status: '已確認' }, '「' + rec.title + '」已移出六頁，回到待挑選'); }
+      if (act === 'out') { movingId = ''; WC.records.quickUpdate(rec, { status: '已確認' }, '「' + rec.title + '」已移出家訊，回到待挑選'); }
       if (act === 'layout' && v !== rec.layout) WC.records.quickUpdate(rec, { layout: v }, '「' + rec.title + '」改用' + v);
       if (act === 'adopt') WC.records.quickUpdate(rec, { status: '已採用' }, '已採用「' + rec.title + '」，排在「' + rec.unit + '」頁');
     });

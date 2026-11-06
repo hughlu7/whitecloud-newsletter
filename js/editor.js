@@ -759,7 +759,9 @@ WC.editor = (function () {
       newsletter: field('newsletter').value,
       layout: layoutValue(),
       status: finalStatus(mode),
-      unitConfirmed: !!unitValue()      // v2.1：沒選單元就存草稿時記為未確認
+      unitConfirmed: !!unitValue(),     // v2.1：沒選單元就存草稿時記為未確認
+      // v2.5：開啟時的單元。沒改單元而主編剛好改名／互換／搬移時，後端保留伺服器上的單元
+      unitAtOpen: current ? current.unit : undefined
     };
   }
 

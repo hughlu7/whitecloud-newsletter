@@ -40,7 +40,7 @@ WC.records = (function () {
 
   function renderFilters() {
     const units = WC.state.config.units;
-    const counts = {};
+    const counts = Object.create(null);   // v2.5：單元名稱可能是 constructor、__proto__ 等字
     const byStatus = WC.state.records.filter(function (r) { return !WC.state.filterStatus || r.status === WC.state.filterStatus; });
     byStatus.forEach(function (r) { counts[r.unit] = (counts[r.unit] || 0) + 1; });
     const chips = [{ v: '', label: '全部', n: byStatus.length }].concat(units.map(function (u) {
@@ -140,7 +140,8 @@ WC.records = (function () {
     const data = {
       id: rec.id, title: rec.title, date: rec.date, unit: rec.unit, rawText: rec.rawText, summary: rec.summary,
       newsletter: rec.newsletter, layout: rec.layout, status: rec.status, photos: rec.photos,
-      unitConfirmed: rec.unitConfirmed !== false   // v2.2 L2：快速更新也帶上，避免草稿的「單元未確認」被改掉
+      unitConfirmed: rec.unitConfirmed !== false,  // v2.2 L2：快速更新也帶上，避免草稿的「單元未確認」被改掉
+      unitAtOpen: rec.unit                         // v2.5：沒改單元時，後端保留伺服器上的單元（主編可能剛改名）
     };
     Object.assign(data, patch);
     let ok = false;

@@ -11,6 +11,7 @@ WC.app = (function () {
     WC.layout.bind();
     WC.printview.bind();
     WC.ai.bind();
+    WC.settings.bind();
     bindHeader();
     WC.state.month = readMonthFromUrl() || U.currentMonth();
 
@@ -36,17 +37,18 @@ WC.app = (function () {
       const b = await WC.api.bootstrap();
       WC.state.me = b.me;
       WC.state.config = b.config;
+      WC.state.configVersion = b.configVersion || '';
       WC.state.ai = b.ai || { enabled: false };
+      WC.settings.clear();   // v2.5：換身分或重新登入時，設定草稿作廢
       renderBrokenBanner(b.me, b.brokenRows || []);
-      document.title = b.config.newsletterName + '｜' + b.config.className;
-      U.$('#brand-name').textContent = b.config.newsletterName;
-      U.$('#brand-class').textContent = b.config.className;
+      applyConfig(b.config);
       U.$('#who').textContent = b.me.name + '（' + b.me.role + '）';
       // 版本：前端與後端不同時一併顯示，方便確認部署是否完成
       U.$('#app-version').textContent = '白雲家訊 v' + WC.VERSION +
         (b.version && b.version !== 'demo' && b.version !== WC.VERSION ? '（後端 v' + b.version + '，請確認兩邊都已更新）' : '');
       U.$('#app').hidden = false;
       await reload(prefetch);
+      if (WC.state.tab === 'settings') WC.settings.onShow();
     } catch (e) {
       if (e.code === 'NOT_MEMBER') WC.auth.forget();   // 換帳號重新整理時不要再用這個登入
       if (e.code === 'NOT_MEMBER' || e.code === 'NOT_SETUP') showFatal(e.message);
@@ -67,6 +69,13 @@ WC.app = (function () {
       '<ol><li>請管理者開啟 Apps Script，先執行 <code>repairBrokenPhotos</code> 預覽，確認後執行 <code>repairBrokenPhotosApply</code>，系統會依照片上的標記重建照片清單。</li>' +
       '<li>或開啟試算表「檔案 → 版本記錄 → 查看版本記錄」，找到改動前的版本，複製該列「照片JSON」欄的內容貼回目前版本的同一格（不要還原整份試算表，以免蓋掉別人的新紀錄）。</li></ol>';
     box.hidden = false;
+  }
+
+  /** 頁首、分頁標題等依設定顯示的地方（v2.5：主編在網頁上改設定後直接套用，不必整頁重載） */
+  function applyConfig(cfg) {
+    document.title = cfg.newsletterName + '｜' + cfg.className;
+    U.$('#brand-name').textContent = cfg.newsletterName;
+    U.$('#brand-class').textContent = cfg.className;
   }
 
   function showFatal(msg) {
@@ -133,18 +142,25 @@ WC.app = (function () {
   }
 
   function render() {
+    const isEditor = WC.state.me && WC.state.me.role === '主編';
+    if (WC.state.tab === 'settings' && !isEditor) WC.state.tab = 'library';   // 老師看不到設定（後端也會擋）
+    U.$('#tab-settings').hidden = !isEditor;
+    // v2.5：頁數＝單元數，分頁標題跟著顯示（例如「家訊編排（7 頁）」）
+    const pages = WC.state.config ? WC.state.config.units.length : 0;
+    U.$('#tab-pages').textContent = '家訊編排' + (pages ? '（' + pages + ' 頁）' : '');
+    U.$('#pages-total').textContent = pages;
     WC.records.render();
     WC.layout.render();
+    if (WC.state.tab === 'settings') WC.settings.render();
     U.$all('.tab').forEach(function (t) {
       const on = t.getAttribute('data-tab') === WC.state.tab;
       t.classList.toggle('on', on);
       t.setAttribute('aria-selected', on);
     });
     U.$all('.panel').forEach(function (p) { p.hidden = p.id !== 'panel-' + WC.state.tab; });
-    WC.printview.refreshIfVisible(); // 只在六頁編排分頁顯示時排 A4 預覽
-    const isEditor = WC.state.me && WC.state.me.role === '主編';
+    WC.printview.refreshIfVisible(); // 只在家訊編排分頁顯示時排 A4 預覽
     U.$('#role-hint').textContent = isEditor
-      ? '您是主編：在卡片上按「採用／不採用」即可決定；到「六頁編排」可把素材移到別頁。'
+      ? '您是主編：在卡片上按「採用／不採用」即可決定；到「家訊編排」可把素材移到別頁；到「⚙ 設定」可增刪單元。'
       : '';
     U.$('#role-hint').hidden = !isEditor;
     const t = U.todayStr();
@@ -204,22 +220,25 @@ WC.app = (function () {
     U.$('#month-next').addEventListener('click', function () { setMonth(U.shiftMonth(WC.state.month, 1)); });
     U.$('#month-input').addEventListener('change', function (e) { if (e.target.value) setMonth(e.target.value); });
     U.$('#btn-new').addEventListener('click', function () { WC.editor.open(null); });
-    U.$('#btn-signout').addEventListener('click', function () { WC.auth.signOut(); });
-    U.$('#btn-reload').addEventListener('click', function () { location.reload(); });
+    // v2.5（回測 6）：有未儲存的設定時，登出、重新整理、換示範身分前先用頁內確認視窗詢問
+    U.$('#btn-signout').addEventListener('click', async function () { if (await WC.settings.confirmDiscard('登出')) WC.auth.signOut(); });
+    U.$('#btn-reload').addEventListener('click', async function () { if (await WC.settings.confirmDiscard('重新整理')) location.reload(); });
     U.$('.tabs').addEventListener('click', function (e) {
       const t = e.target.closest('.tab');
       if (!t) return;
       WC.state.tab = t.getAttribute('data-tab');
       render();
+      if (WC.state.tab === 'settings') WC.settings.onShow();
     });
     U.$('#demo-role').addEventListener('change', async function (e) {
+      if (!(await WC.settings.confirmDiscard('切換示範身分'))) { e.target.value = WC.demo.getUserKey(); return; }
       WC.demo.setUser(e.target.value);
       await afterSignIn();
       U.toast('已切換示範身分', 'info');
     });
   }
 
-  return { start: start, reload: function () { return reload(); }, render: render, afterSave: afterSave, afterDelete: afterDelete,
+  return { start: start, reload: function () { return reload(); }, render: render, applyConfig: applyConfig, afterSave: afterSave, afterDelete: afterDelete,
     reloadCount: function () { return reloadCount; }, localUpdates: function () { return localUpdates; } };
 })();
 

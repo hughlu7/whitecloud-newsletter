@@ -70,7 +70,9 @@
 
     <nav class="tabs" role="tablist">
       <button type="button" class="tab on" role="tab" data-tab="library">本月素材</button>
-      <button type="button" class="tab" role="tab" data-tab="pages">六頁編排</button>
+      <button type="button" class="tab" role="tab" data-tab="pages" id="tab-pages">家訊編排</button>
+      <!-- v2.5：只有主編看得到（後端 getSettings／saveSettings 也只限主編） -->
+      <button type="button" class="tab" role="tab" data-tab="settings" id="tab-settings" hidden>⚙ 設定<span id="tab-settings-dot" class="tab-dot" hidden aria-label="（有未儲存的修改）">●</span></button>
     </nav>
 
     <main>
@@ -106,10 +108,10 @@
         <div id="record-list"></div>
       </section>
 
-      <!-- 六頁編排（第 1 階段：總覽＋主編移動素材） -->
+      <!-- 家訊編排（v2.5 前叫「六頁編排」；頁數＝單元數）：總覽＋主編移動素材 -->
       <section id="panel-pages" class="panel" hidden>
         <div class="pages-top">
-          <p class="stage-note">一個單元一頁，共六頁。<span id="pages-role-note"></span>下方是 A4 列印預覽。</p>
+          <p class="stage-note">一個單元一頁，共 <b id="pages-total">6</b> 頁（單元數＝家訊頁數）。<span id="pages-role-note"></span>下方是 A4 列印預覽。</p>
           <p class="print-reminder">列印請用下方「🖨 列印／另存 PDF」按鈕；直接按 Ctrl+P（⌘P）會略過肖像同意與待處理內容的確認。</p>
           <details class="help-pop">
             <summary aria-label="版型與視覺語言說明">?</summary>
@@ -124,7 +126,7 @@
               <ul>
                 <li><span class="sw sky"></span>天空藍、<span class="sw cream"></span>奶油黃、<span class="sw peach"></span>柔和橘</li>
                 <li>圓角照片、清楚的小標題、溫暖具體的文字</li>
-                <li>固定六頁，一個單元一頁；內容過多時精簡或拆到下個月</li>
+                <li>一個單元一頁（單元數＝頁數，主編可在「設定」增刪）；內容過多時精簡或拆到下個月</li>
               </ul>
             </div>
           </details>
@@ -151,6 +153,66 @@
           </div>
           <div id="print-root"><main class="sheets" id="print-sheets"></main></div>
         </section>
+      </section>
+
+      <!-- v2.5 設定（只有主編）：單元管理＋家訊資訊；按「儲存設定」才寫入 -->
+      <section id="panel-settings" class="panel" hidden>
+        <div class="settings">
+          <p class="settings-intro">在這裡修改家訊的單元與文字，按最下方「儲存設定」才會生效。</p>
+          <div id="settings-msg" class="settings-msg" role="status" aria-live="polite" tabindex="-1" hidden></div>
+
+          <section class="set-card" aria-labelledby="set-units-h">
+            <h3 id="set-units-h">家訊單元 <small id="set-units-count" class="set-count"></small></h3>
+            <p class="set-help"><b>每個單元＝家訊的一頁</b>，順序就是頁序；單元數＝家訊頁數（1–12 個）。名稱最多 12 字，不能有逗號或頓號。</p>
+            <ol id="set-unit-list" class="set-unit-list"></ol>
+            <p id="set-min-note" class="set-help set-min-note" role="note" hidden></p>
+            <div class="set-add">
+              <label class="visually-hidden" for="set-unit-new">新單元名稱</label>
+              <input id="set-unit-new" type="text" autocomplete="off" placeholder="新單元名稱（例如：戶外教學）" aria-describedby="set-unit-new-count">
+              <small id="set-unit-new-count" class="counter set-name-count">0／12</small>
+              <button type="button" id="set-unit-add" class="btn">＋ 新增單元</button>
+            </div>
+            <p id="set-unit-err" class="set-err" role="alert" hidden></p>
+            <p class="set-help">改名：已有的紀錄會一起改成新名字；其他老師正在編輯的紀錄存檔時也會自動用新名字，不必重來。刪除：按「儲存設定」後才會真的刪除。</p>
+          </section>
+
+          <section class="set-card" aria-labelledby="set-info-h">
+            <h3 id="set-info-h">家訊資訊</h3>
+            <div class="set-grid">
+              <label class="set-field"><span>班級名稱 <small class="counter" data-count-for="set-className"></small></span>
+                <input id="set-className" name="set-className" data-maxchars="20" autocomplete="off"></label>
+              <label class="set-field"><span>家訊名稱 <small class="counter" data-count-for="set-newsletterName"></small></span>
+                <input id="set-newsletterName" name="set-newsletterName" data-maxchars="20" autocomplete="off"></label>
+              <label class="set-field wide"><span>頁尾標語 <small class="muted">（留空＝用預設句）</small> <small class="counter" data-count-for="set-footer"></small></span>
+                <input id="set-footer" name="set-footer" data-maxchars="60" autocomplete="off"></label>
+              <label class="set-field wide"><span>沒有素材時的頁面文字 <small class="muted">（某個單元這個月沒有素材時，那一頁印的句子；留空＝用預設句）</small> <small class="counter" data-count-for="set-emptyText"></small></span>
+                <textarea id="set-emptyText" name="set-emptyText" rows="2" data-maxchars="100"></textarea></label>
+              <div class="set-field">
+                <span id="set-maxPhotos-l">每筆照片上限 <small class="muted">（1–<span id="set-maxPhotos-max">20</span> 張）</small></span>
+                <div class="stepper-num" role="group" aria-labelledby="set-maxPhotos-l">
+                  <button type="button" class="icon-btn" id="set-maxPhotos-dec" aria-label="減少一張">−</button>
+                  <input id="set-maxPhotos" type="number" inputmode="numeric" min="1" max="20" step="1" aria-labelledby="set-maxPhotos-l">
+                  <button type="button" class="icon-btn" id="set-maxPhotos-inc" aria-label="增加一張">＋</button>
+                </div>
+                <small id="set-maxPhotos-warn" class="set-warn" hidden></small>
+              </div>
+            </div>
+          </section>
+
+          <section class="set-card" aria-labelledby="set-layouts-h">
+            <h3 id="set-layouts-h">版型 <small class="muted">（唯讀）</small></h3>
+            <p id="set-layouts" class="set-layouts"></p>
+            <p class="set-help">版型由系統固定，不能在這裡修改。</p>
+          </section>
+
+          <p class="settings-note">試算表「設定表」仍可手動修改，但建議在這裡改：在這裡改名或刪除單元時，舊紀錄會一起更新；手動改不會。</p>
+
+          <div class="set-actions">
+            <span id="set-dirty" class="set-dirty" aria-live="polite"></span>
+            <button type="button" id="set-reset" class="btn">放棄修改</button>
+            <button type="button" id="set-save" class="btn btn-primary">儲存設定</button>
+          </div>
+        </div>
       </section>
     </main>
     <p id="app-version" class="app-version"></p>
@@ -303,6 +365,18 @@
     </div>
   </div>
 
+  <!-- v2.5 設定用的確認視窗（頁內對話框，不用 confirm()） -->
+  <div id="set-confirm" class="modal set-confirm" hidden>
+    <div class="modal-box confirm-box" role="alertdialog" aria-modal="true" aria-labelledby="set-confirm-h" aria-describedby="set-confirm-body">
+      <h2 id="set-confirm-h"></h2>
+      <div id="set-confirm-body"></div>
+      <div class="confirm-actions">
+        <button type="button" id="set-confirm-cancel" class="btn">取消</button>
+        <button type="button" id="set-confirm-go" class="btn btn-primary">確定</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast" class="toast" aria-live="polite"></div>
 
   <script src="js/config.js"></script>
@@ -323,6 +397,7 @@
   <script src="js/viewer.js"></script>
   <script src="js/editor.js"></script>
   <script src="js/ai.js"></script>
+  <script src="js/settings.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

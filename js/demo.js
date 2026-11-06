@@ -18,8 +18,16 @@ WC.demo = (function () {
     footer: '白雲班的每一天，都值得記錄。',
     units: ['主題課程', '生活與探索', '學習區 A', '學習區 B', '體能活動', '白雲大小事'],
     layouts: ['故事版', '相簿版', '探索版'],
-    maxPhotos: 20
+    maxPhotos: 20,
+    emptyText: ''
   };
+  // v2.5：與 GAS 相同的設定上限、單元別名（舊名 → 新名，改名或刪除搬移時記下）
+  const LIMIT_MAX_PHOTOS = 20;
+  const SETTINGS_LIMITS = { unitName: 12, unitsMin: 1, unitsMax: 12, className: 20, newsletterName: 20, footer: 60, emptyText: 100 };
+  const unitAliases = Object.create(null);
+  // 與 GAS 相同的字元規則（C0、DEL、C1、雙向控制、行／段分隔；單元名稱另擋填充字）
+  const CTRL_BIDI_RE = /[\u0000-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069\u2028\u2029]/;
+  const UNIT_BAD_CHARS_RE = /[\u0000-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069\u2028\u2029\u115F\u1160\u3164\uFFA0\u2800]/;
   const TEACHER_STATUSES = ['草稿', '已確認'];
   let demoResponseLimit = 6 * 1024 * 1024; // 模擬 getPhotos 回應上限；回測可用 WC.demo.setResponseLimit() 調小
   const STATUSES = ['草稿', '已確認', '已採用', '不採用'];
@@ -191,7 +199,10 @@ WC.demo = (function () {
     if (Array.from(title).length > 60) fail('BAD_REQUEST', '標題最多 60 字');
     if (!isRealDate(r.date)) fail('BAD_REQUEST', '活動日期不正確（格式應為 YYYY-MM-DD，且必須是存在的日期）');
     const old = r.id ? records.find(function (x) { return x.id === r.id; }) : null;
-    if (CONFIG.units.indexOf(r.unit) < 0 && !(old && old.unit === r.unit)) fail('BAD_REQUEST', '家訊單元不在設定表的單元清單內');
+    // 與 GAS keepServerUnit_ 相同：沒改單元、但這筆已被主編改名／互換／搬移 → 保留目前的單元
+    const sent = String(r.unit || '');
+    const atOpen = typeof r.unitAtOpen === 'string' ? r.unitAtOpen : null;
+    const unit = resolveRecordUnit(old && atOpen !== null && sent === atOpen && old.unit !== atOpen ? old.unit : sent, old);
     if (r.layout && CONFIG.layouts.indexOf(r.layout) < 0 && !(old && old.layout === r.layout)) fail('BAD_REQUEST', '偏好版型不在設定表的版型清單內');
     if (STATUSES.indexOf(r.status) < 0) fail('BAD_REQUEST', '處理狀態不正確');
     if (Array.from(String(r.rawText || '')).length > 5000) fail('BAD_REQUEST', '原始紀錄最多 5000 字');
@@ -202,7 +213,7 @@ WC.demo = (function () {
       fail('FORBIDDEN', '「' + r.status + '」狀態只有主編可以設定。');
     }
     return {
-      id: r.id || '', month: r.date.slice(0, 7), date: r.date, unit: r.unit, title: title,
+      id: r.id || '', month: r.date.slice(0, 7), date: r.date, unit: unit, title: title,
       rawText: String(r.rawText || '').trim(), summary: String(r.summary || '').trim(),
       newsletter: String(r.newsletter || '').trim(), layout: r.layout || '', status: r.status,
       photos: dedupePhotos(r.photos || []),
@@ -267,7 +278,129 @@ WC.demo = (function () {
     return data;
   }
 
+  // ---------- v2.5 設定（規則與 gas/Code.gs 的 planSettings_、actionSaveSettings_ 相同） ----------
+  /** 設定內容的版本：GAS 用 SHA-256；示範模式用簡單雜湊，同樣是「內容一樣 → 版本一樣」 */
+  function configVersion() {
+    const s = JSON.stringify(CONFIG);
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    return 'demo' + h.toString(36);
+  }
+  function resolveUnitAlias(unit) {
+    let u = unit;
+    for (let i = 0; i < 20; i++) {
+      const a = unitAliases[u];
+      if (!a) return '';
+      u = a.to;
+      if (CONFIG.units.indexOf(u) >= 0) return u;
+    }
+    return '';
+  }
+  function resolveRecordUnit(unit, old) {
+    if (CONFIG.units.indexOf(unit) >= 0) return unit;
+    if (old && old.unit === unit) return unit;
+    const mapped = resolveUnitAlias(unit);
+    if (mapped) return mapped;
+    fail('BAD_REQUEST', '家訊單元「' + unit + '」不在設定表的單元清單內（主編可能剛改過單元，請重新選擇單元）');
+  }
+  function cleanUnitName(v, label) {
+    const s = String(v == null ? '' : v).replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').trim();
+    if (!s) fail('BAD_REQUEST', label + '不可空白');
+    if (/[,，、]/.test(s)) fail('BAD_REQUEST', label + '「' + s + '」不能有逗號或頓號');
+    if (UNIT_BAD_CHARS_RE.test(s)) fail('BAD_REQUEST', label + '不可換行，也不可含控制字元或看不見的特殊字元');
+    if (Array.from(s).length > SETTINGS_LIMITS.unitName) fail('BAD_REQUEST', label + '「' + s + '」最多 ' + SETTINGS_LIMITS.unitName + ' 字');
+    return s;
+  }
+  function planSettings(p) {
+    const s = p.settings || {};
+    const text = function (v, max, label, required) {
+      const t = String(v == null ? '' : v).replace(/[\r\n\t\u2028\u2029]+/g, ' ').trim();
+      if (CTRL_BIDI_RE.test(t)) fail('BAD_REQUEST', label + '不可含控制字元或文字方向控制字元');
+      if (required && !t) fail('BAD_REQUEST', '請填寫' + label);
+      if (Array.from(t).length > max) fail('BAD_REQUEST', label + '最多 ' + max + ' 字');
+      return t;
+    };
+    const settings = {
+      className: text(s.className, SETTINGS_LIMITS.className, '班級名稱', true),
+      newsletterName: text(s.newsletterName, SETTINGS_LIMITS.newsletterName, '家訊名稱', true),
+      footer: text(s.footer, SETTINGS_LIMITS.footer, '頁尾標語', false),
+      emptyText: text(s.emptyText, SETTINGS_LIMITS.emptyText, '空單元文字', false)
+    };
+    const mp = Number(s.maxPhotos);
+    if (!(isFinite(mp) && Math.floor(mp) === mp && mp >= 1 && mp <= LIMIT_MAX_PHOTOS)) fail('BAD_REQUEST', '每筆照片上限必須是 1–' + LIMIT_MAX_PHOTOS + ' 的整數');
+    settings.maxPhotos = mp;
+    if (!Array.isArray(p.units)) fail('BAD_REQUEST', '缺少單元清單');
+    if (p.units.length < SETTINGS_LIMITS.unitsMin || p.units.length > SETTINGS_LIMITS.unitsMax) fail('BAD_REQUEST', '單元數量必須是 1–12 個（單元數＝家訊頁數）');
+    const names = [];
+    const seen = Object.create(null), fromSeen = Object.create(null), map = Object.create(null), removed = Object.create(null);
+    p.units.forEach(function (u, i) {
+      const name = cleanUnitName(u && u.name, '第 ' + (i + 1) + ' 個單元名稱');
+      if (seen[name]) fail('BAD_REQUEST', '單元名稱「' + name + '」重複');
+      seen[name] = true;
+      names.push(name);
+      const from = u && u.from != null ? String(u.from) : '';
+      if (!from) return;
+      if (CONFIG.units.indexOf(from) < 0) fail('BAD_REQUEST', '原單元「' + from + '」不在目前的清單內，請重新整理後再改');
+      if (fromSeen[from]) fail('BAD_REQUEST', '原單元「' + from + '」出現兩次');
+      fromSeen[from] = true;
+      if (from !== name) map[from] = name;
+    });
+    (Array.isArray(p.removed) ? p.removed : []).forEach(function (r) {
+      const name = String(r && r.name || '');
+      if (CONFIG.units.indexOf(name) < 0) fail('BAD_REQUEST', '要刪除的單元「' + name + '」不在目前的清單內，請重新整理後再改');
+      if (fromSeen[name] || name in removed) fail('BAD_REQUEST', '單元「' + name + '」不能同時保留又刪除');
+      const moveTo = r && r.moveTo ? String(r.moveTo) : '';
+      if (moveTo && !seen[moveTo]) fail('BAD_REQUEST', '「' + name + '」的紀錄要移到的單元「' + moveTo + '」不在新清單內');
+      removed[name] = moveTo;
+      if (moveTo) map[name] = moveTo;
+    });
+    CONFIG.units.forEach(function (u) {
+      if (!fromSeen[u] && !(u in removed)) fail('BAD_REQUEST', '單元「' + u + '」沒有說明要保留還是刪除，請重新整理後再改');
+    });
+    return { settings: settings, units: names, map: map, removed: removed };
+  }
+  function unitUsage() {
+    const counts = Object.create(null);
+    let maxPhotosUsed = 0;
+    records.forEach(function (r) { counts[r.unit] = (counts[r.unit] || 0) + 1; maxPhotosUsed = Math.max(maxPhotosUsed, r.photos.length); });
+    return { unitCounts: counts, maxPhotosUsed: maxPhotosUsed };
+  }
+  function settingsResult(extra) {
+    return Object.assign({ config: clone(CONFIG), configVersion: configVersion(), limits: Object.assign({ maxPhotos: LIMIT_MAX_PHOTOS }, SETTINGS_LIMITS) },
+      clone(unitUsage()), extra || {});
+  }
+  function requireEditor() { if (currentUser.role !== '主編') fail('FORBIDDEN', '只有主編可以查看或修改設定。'); }
+  function saveSettings(p) {
+    requireEditor();
+    if (typeof p.expectedVersion !== 'string' || !p.expectedVersion) fail('BAD_REQUEST', '缺少設定版本（請重新整理後再改）。');
+    if (p.expectedVersion !== configVersion()) fail('CONFLICT', '設定剛被其他主編（或有人在試算表）改過，請重新整理後再改。');
+    const plan = planSettings(p);
+    const usage = unitUsage();
+    Object.keys(plan.removed).forEach(function (name) {
+      const n = usage.unitCounts[name] || 0;
+      if (n && !plan.removed[name]) { const e = new Error('單元「' + name + '」還有 ' + n + ' 筆紀錄，請先選擇要移到哪個單元。'); e.code = 'UNIT_HAS_RECORDS'; e.unit = name; e.count = n; throw e; }
+    });
+    let moved = 0;
+    records.forEach(function (r) {   // 與 GAS 相同：只改單元，不改 updatedAt
+      if (r.unit in plan.map && plan.map[r.unit] !== r.unit) { r.unit = plan.map[r.unit]; moved++; }
+    });
+    CONFIG.className = plan.settings.className;
+    CONFIG.newsletterName = plan.settings.newsletterName;
+    CONFIG.footer = plan.settings.footer || '白雲班的每一天，都值得記錄。';   // 與 readConfig_ 相同：空白用預設
+    CONFIG.maxPhotos = plan.settings.maxPhotos;
+    CONFIG.emptyText = plan.settings.emptyText;
+    CONFIG.units = plan.units.slice();
+    const now = Date.now();
+    Object.keys(plan.map).forEach(function (from) { unitAliases[from] = { to: plan.map[from], at: now }; });
+    plan.units.forEach(function (u) { delete unitAliases[u]; });
+    lastSettingsWrite = { moved: moved, units: plan.units.slice() };
+    return settingsResult({ moved: moved });
+  }
+  let lastSettingsWrite = null;
+
   const handlers = {
+    getSettings: function () { requireEditor(); return settingsResult(); },
+    saveSettings: function (p) { return saveSettings(p); },
     aiDraft: function (p) { return demoAiDraft(p); },
     bootstrap: function () {
       // 與 GAS 相同：只有主編會收到照片資料損壞的列
@@ -276,7 +409,7 @@ WC.demo = (function () {
           .filter(function (x) { return x.r.photosBroken; })
           .map(function (x) { return { row: x.row, title: x.r.title }; })
         : [];
-      return { me: clone(currentUser), config: clone(CONFIG), version: 'demo', brokenRows: brokenRows,
+      return { me: clone(currentUser), config: clone(CONFIG), configVersion: configVersion(), version: 'demo', brokenRows: brokenRows,
         ai: { enabled: true, demo: true } };
     },
 
@@ -409,6 +542,11 @@ WC.demo = (function () {
   /** 回測用：查看某張照片的模擬標記 */
   function photoTag(fileId) { return photoMeta[fileId] ? clone(photoMeta[fileId]) : null; }
 
+  /** 回測用（v2.5）：所有紀錄的單元與 updatedAt（確認改名搬移不改 updatedAt）、目前設定、單元別名 */
+  function recordUnits() { return records.map(function (r) { return { id: r.id, title: r.title, unit: r.unit, updatedAt: r.updatedAt }; }); }
+  function configNow() { return clone(CONFIG); }
+  function aliases() { const o = {}; Object.keys(unitAliases).forEach(function (k) { o[k] = unitAliases[k].to; }); return o; }
+
   return { stats: stats, resetStats: resetStats, setUploadDelay: setUploadDelay, failUploads: failUploads, recordPhotos: recordPhotos, allRecordPhotoIds: allRecordPhotoIds,
-    handle: handle, setUser: setUser, getUserKey: getUserKey, setConfig: setConfig, markBroken: markBroken, repair: repair, photoTag: photoTag, fakeUpload: fakeUpload, setResponseLimit: setResponseLimit, aiCalls: aiCalls, aiFailNext: aiFailNext, aiLast: function () { return demoAiLast ? clone(demoAiLast) : null; } };
+    handle: handle, setUser: setUser, getUserKey: getUserKey, setConfig: setConfig, markBroken: markBroken, repair: repair, photoTag: photoTag, recordUnits: recordUnits, configNow: configNow, aliases: aliases, configVersion: configVersion, fakeUpload: fakeUpload, setResponseLimit: setResponseLimit, aiCalls: aiCalls, aiFailNext: aiFailNext, aiLast: function () { return demoAiLast ? clone(demoAiLast) : null; } };
 })();

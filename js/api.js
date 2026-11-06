@@ -71,6 +71,9 @@ WC.api = (function () {
     },
     getPhotos: function (ids) { return call('getPhotos', { ids: ids }); },
     /** 第 2 階段：AI 整理。record 只含 title、date、unit、layout、rawText、photoCount、photoNotes（不含照片本身；v2.4 起原文直接送出） */
-    aiDraft: function (record) { return call('aiDraft', { record: record }); }
+    aiDraft: function (record) { return call('aiDraft', { record: record }); },
+    /** v2.5 主編設定：讀（含 configVersion、各單元紀錄數）與存（payload 見 settings.js） */
+    getSettings: function () { return call('getSettings'); },
+    saveSettings: function (payload) { return call('saveSettings', payload); }
   };
 })();
