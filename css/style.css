@@ -657,3 +657,24 @@ body.viewer-open { overflow: hidden; }
 .set-orphan-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .set-orphan-tools select { min-height: 44px; border: 1px solid var(--line); border-radius: 10px; padding: 0 .6em; background: #fff; flex: 1 1 180px; min-width: 0; }
 .set-orphan-tools .set-warn { flex: 1 1 100%; }
+
+/* v2.6.0 手機修正：家訊編排頂端在手機上不再擠成一欄（說明框、列印提醒、問號鈕改為換行排列） */
+.pages-top { flex-wrap: wrap; }
+.pages-top .stage-note { flex: 1 1 0; min-width: 12em; }
+.pages-top .print-reminder { flex: 1 1 100%; order: 3; margin: 0; }
+
+/* v2.6.0 手機修正：iPhone Safari 的月份選擇框會撐高整個月份列、而且看不到圖示；固定大小並畫出日曆圖示 */
+#month-input {
+  -webkit-appearance: none; appearance: none;
+  width: 44px; height: 44px; min-width: 44px; max-height: 44px; padding: 0; margin: 0;
+  position: relative; font-size: 16px; line-height: 44px; overflow: hidden; border-radius: 50%;
+  background: center / 22px 22px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232f6f95' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='5' width='18' height='16' rx='2'/%3E%3Cpath d='M3 10h18M8 3v4M16 3v4'/%3E%3C/svg%3E");
+}
+#month-input::-webkit-calendar-picker-indicator { opacity: 0; position: absolute; inset: 0; width: 100%; height: 100%; cursor: pointer; }
+#month-input::-webkit-date-and-time-value { opacity: 0; }
+@media (max-width: 400px) { #month-input { width: 44px; } }
+/* v2.6.0 手機修正：窄手機（iPhone SE 等）三個分頁都要看得到 */
+@media (max-width: 420px) {
+  .tabs { padding: 0 6px; gap: 0; }
+  .tab { padding: .6em .55em; flex: 1 1 auto; font-size: .95rem; }
+}
