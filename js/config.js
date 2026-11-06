@@ -8,6 +8,6 @@
  * 已填好時，也可以在網址後面加 ?demo=1 強制進入示範模式。
  */
 window.WC_CONFIG = {
-  GAS_URL: 'https://script.google.com/macros/s/AKfycbwhsgUlKexEtuuUbijzHKZZHJpE6HuJr1fknJw_3_b7hMcugbHxkVmETgc6EOCJ_M7xHg/exec',
+  GAS_URL: 'https://script.google.com/macros/s/AKfycbyH78FhY8eWgoqhe4HbIgaNHyhKG4el3xYsUJnnLu1F0qQ3BPVVwdAmjJ8IMletpLW6sA/exec',
   CLIENT_ID: '179214705510-b55cbr34gjkunnj62nr33r8bk360mdn3.apps.googleusercontent.com'
 };
