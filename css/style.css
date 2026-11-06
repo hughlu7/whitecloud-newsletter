@@ -2,14 +2,14 @@
  * 白雲家訊 — 畫面樣式（天空藍、奶油黃、柔和橘） */
 :root {
   --sky: #5aa9e6;
-  --sky-deep: #2f7fc1;
+  --sky-deep: #2870ad;   /* v2.6.0 巡檢：原 #2f7fc1 白字對比 4.26，略加深到 5.2 */
   --sky-soft: #e6f3fc;
   --cream: #fff6d8;
   --cream-deep: #f6e3a1;
   --peach: #f7a46b;
   --peach-soft: #fde7d6;
   --ink: #2c3e50;
-  --muted: #6b7c8c;
+  --muted: #5d6d7c;      /* v2.6.0 巡檢：原 #6b7c8c 對白底 4.30，改成與列印版相同（5.3） */
   --line: #dbe6ef;
   --bg: #f7fbfe;
   --card: #ffffff;
@@ -34,7 +34,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .btn:hover:not(:disabled) { border-color: var(--sky); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn-primary { background: var(--sky-deep); border-color: var(--sky-deep); color: #fff; }
-.btn-primary:hover:not(:disabled) { background: #256aa3; }
+.btn-primary:hover:not(:disabled) { background: #215e93; }
 .btn-danger { color: var(--danger); border-color: #f1c4c2; }
 .btn-sm { min-height: 44px; padding: .2em 1em; border: 1px solid var(--line); border-radius: 999px; background: #fff; cursor: pointer; }
 .btn-link { background: none; border: 0; color: var(--sky-deep); cursor: pointer; text-decoration: underline; }
@@ -678,3 +678,43 @@ body.viewer-open { overflow: hidden; }
   .tabs { padding: 0 6px; gap: 0; }
   .tab { padding: .6em .55em; flex: 1 1 auto; font-size: .95rem; }
 }
+
+/* ===== v2.6.0 手機巡檢修正（320／390／字級 130%／768／1280 逐畫面看圖） ===== */
+/* 已採用按鈕：白字對綠底 3.4 → 4.6 */
+.btn-adopt.on { background: #2e8550; border-color: #2e8550; }
+/* 長 Email、長單元名不撐破對話框與「無法使用」卡片 */
+.login-card, .confirm-box, #set-confirm-body, #print-confirm-body, .leave-box { overflow-wrap: anywhere; min-width: 0; }
+.confirm-box { width: 100%; }
+/* 設定頁：鍵盤、Tab 聚焦時輸入框不被底部固定的儲存列擋住 */
+html:has(#panel-settings:not([hidden])) { scroll-padding-bottom: 120px; }
+/* 矮畫面（手機鍵盤彈出、橫拿）：儲存列不再固定，免得佔掉半個畫面 */
+@media (max-height: 500px) { .set-actions { position: static; } }
+@media (max-width: 759px) {
+  /* 編輯視窗底列：「送出」不再因 min-width 7em 超出右緣；按鈕可縮、文字過長時省略 */
+  #btn-save { min-width: 0; }
+  .modal-foot .btn { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  /* 送出後等照片上傳：上一步、只存草稿此時都停用，先收起，讓「取消送出」與進度鈕各佔一半 */
+  .modal-foot:has(#btn-cancel-send:not([hidden])) #btn-prev,
+  .modal-foot:has(#btn-cancel-send:not([hidden])) #btn-draft { display: none !important; }
+  /* 紀錄卡片按鈕不折字（「不採用」在 320 變成「不採／用」） */
+  .card-actions .btn-sm { white-space: nowrap; }
+  /* 列印前確認：與設定確認視窗一樣留邊、圓角，內容過長可捲動 */
+  .print-confirm.modal { padding: 16px; }
+  .print-confirm .confirm-box { border-radius: 18px; height: auto; max-height: calc(100dvh - 32px); overflow-y: auto; }
+  /* 單元改名框：用整列寬度（原本只用第 2 欄，輸入框只看得到 5、6 個字） */
+  .set-unit .set-rename { grid-column: 1 / -1; }
+  .set-rename input { flex: 1 1 70%; }
+  .set-rename .btn { flex: 1 1 40%; }
+}
+@media (max-width: 420px) {
+  /* 窄手機：採用／不採用一列、「編輯」另起一列 */
+  .decide { flex: 1 1 100%; }
+}
+/* 編輯視窗：聚焦的欄位捲進畫面時上下留一點空間（聚焦框不被頁尾按鈕列切掉） */
+.modal-body { scroll-padding-block: 12px; }
+/* 手機鍵盤彈出（畫面高度 ≤ 500px）：收起步驟列，讓正在輸入的欄位多一些空間；仍可用底部「上一步／下一步」切換 */
+@media (max-width: 759px) and (max-height: 500px) {
+  .modal-box.is-steps .stepper { display: none; }
+}
+/* 成員訊息（含長 Email）、提示、錯誤訊息：長字串換行；原本會把整個手機版面撐寬到 432px（iPhone 會自動縮小整頁） */
+.settings-msg, .toast-item, .set-err, .mem-note, .set-orphan-h, .orphan-note, .broken-banner { overflow-wrap: anywhere; }
